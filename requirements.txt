@@ -1,0 +1,7 @@
+playwright==1.49.1
+imapclient==3.0.1
+pyzmail36==1.0.4
+flask==3.1.0
+apscheduler==3.10.4
+requests==2.32.3
+gunicorn==23.0.0
