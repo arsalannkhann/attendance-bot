@@ -55,7 +55,7 @@ def login_and_save_session(playwright):
         page.wait_for_timeout(random.randint(2000, 3000))
 
         # Enter password
-        page.fill("input[name='password']", ZOHO_PASSWORD)
+        page.fill("input#password", ZOHO_PASSWORD)
         page.wait_for_timeout(random.randint(500, 1000))
         page.click("#nextbtn")
         page.wait_for_timeout(random.randint(5000, 8000))
