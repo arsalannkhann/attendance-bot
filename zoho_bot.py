@@ -27,10 +27,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# Also log to terminal
-console = logging.StreamHandler()
-console.setLevel(logging.INFO)
-logging.getLogger().addHandler(console)
+# Also log to terminal (guard against duplicate handlers on re-import)
+if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+           for h in logging.getLogger().handlers):
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    logging.getLogger().addHandler(console)
 
 
 def login_and_save_session(playwright):

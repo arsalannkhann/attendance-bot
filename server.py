@@ -1,7 +1,6 @@
 import os
 import random
 import logging
-import threading
 import time as _time
 
 import requests
