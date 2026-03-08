@@ -9,10 +9,6 @@ services:
         sync: false
       - key: ZOHO_PASSWORD
         sync: false
-      - key: OUTLOOK_EMAIL
-        sync: false
-      - key: OUTLOOK_APP_PASSWORD
-        sync: false
       - key: RENDER_EXTERNAL_URL
         sync: false
       - key: ZOHO_ACTION

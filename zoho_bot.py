@@ -1,21 +1,19 @@
 import os
-import re
 import time
 import random
 import logging
-import json
 from pathlib import Path
 
 # ---------------- CONFIG ----------------
 
-ZOHO_EMAIL        = os.environ.get("ZOHO_EMAIL", "your_zoho_email@company.com")
-ZOHO_PASSWORD     = os.environ.get("ZOHO_PASSWORD", "your_zoho_password")
+ZOHO_EMAIL    = os.environ.get("ZOHO_EMAIL", "your_zoho_email@company.com")
+ZOHO_PASSWORD = os.environ.get("ZOHO_PASSWORD", "your_zoho_password")
 
-OUTLOOK_EMAIL     = os.environ.get("OUTLOOK_EMAIL", "your_outlook_email@outlook.com")
-OUTLOOK_APP_PASS  = os.environ.get("OUTLOOK_APP_PASSWORD", "your_app_password")
+SESSION_FILE  = Path(__file__).parent / "session.json"
+LOG_FILE      = Path(__file__).parent / "bot.log"
 
-SESSION_FILE      = Path(__file__).parent / "session.json"
-LOG_FILE          = Path(__file__).parent / "bot.log"
+ZOHO_PEOPLE_URL = "https://people.zoho.in"
+
 
 def get_action():
     """Read action at runtime so server.py can override it dynamically."""
@@ -35,51 +33,8 @@ console.setLevel(logging.INFO)
 logging.getLogger().addHandler(console)
 
 
-def fetch_otp_from_outlook(timeout=60):
-    """Poll Outlook inbox for a 6-digit OTP email."""
-    try:
-        from imapclient import IMAPClient
-        import pyzmail
-    except ImportError:
-        logging.error("Missing packages: pip install imapclient pyzmail36")
-        return None
-
-    logging.info("Connecting to Outlook to fetch OTP...")
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        try:
-            with IMAPClient("outlook.office365.com", ssl=True) as server:
-                server.login(OUTLOOK_EMAIL, OUTLOOK_APP_PASS)
-                server.select_folder("INBOX")
-                messages = server.search(["UNSEEN"])
-
-                for uid, data in server.fetch(messages, ["RFC822"]).items():
-                    msg = pyzmail.PyzMessage.factory(data[b"RFC822"])
-                    body = ""
-                    if msg.text_part:
-                        body = msg.text_part.get_payload().decode(errors="ignore")
-                    elif msg.html_part:
-                        body = msg.html_part.get_payload().decode(errors="ignore")
-
-                    otp_match = re.search(r"\b(\d{6})\b", body)
-                    if otp_match:
-                        logging.info(f"OTP found: {otp_match.group(1)}")
-                        return otp_match.group(1)
-        except Exception as e:
-            logging.warning(f"OTP fetch error: {e}")
-
-        logging.info("OTP not yet received, retrying in 5s...")
-        time.sleep(5)
-
-    logging.error("OTP not received within timeout.")
-    return None
-
-
 def login_and_save_session(playwright):
-    """Full login flow with OTP. Returns browser context or None."""
-    from playwright.sync_api import sync_playwright
-
+    """Full login flow. Returns (browser, context) or (None, None)."""
     logging.info("Starting fresh login...")
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context(
@@ -103,22 +58,7 @@ def login_and_save_session(playwright):
         page.fill("input[name='password']", ZOHO_PASSWORD)
         page.wait_for_timeout(random.randint(500, 1000))
         page.click("#nextbtn")
-        page.wait_for_timeout(random.randint(3000, 5000))
-
-        # Check if OTP page appeared
-        if page.is_visible("input[type='tel']") or "tfa" in page.url or "mfa" in page.url:
-            logging.info("OTP prompt detected, fetching OTP...")
-            otp = fetch_otp_from_outlook()
-
-            if not otp:
-                logging.error("Could not get OTP. Login aborted.")
-                browser.close()
-                return None, None
-
-            page.fill("input[type='tel']", otp)
-            page.wait_for_timeout(random.randint(500, 1000))
-            page.click("#nextbtn")
-            page.wait_for_timeout(random.randint(5000, 8000))
+        page.wait_for_timeout(random.randint(5000, 8000))
 
         # Save session
         context.storage_state(path=str(SESSION_FILE))
@@ -136,42 +76,59 @@ def perform_attendance(page):
     action = get_action()
     try:
         logging.info(f"Navigating to Zoho People for action: {action}")
-        page.goto("https://people.zoho.com/home", timeout=30000)
+        page.goto(ZOHO_PEOPLE_URL, timeout=30000)
         page.wait_for_timeout(random.randint(4000, 6000))
 
-        # Take screenshot for proof
+        # Take screenshot for proof (before clicking)
         screenshot_path = Path(__file__).parent / f"{action}_{int(time.time())}.png"
         page.screenshot(path=str(screenshot_path))
         logging.info(f"Screenshot saved: {screenshot_path}")
 
-        if action == "checkin":
-            # Try common selectors
-            selectors = [
-                "text=Check In",
-                "button:has-text('Check In')",
-                "[data-action='checkin']",
-                ".checkin-btn",
-            ]
-            for sel in selectors:
-                if page.is_visible(sel):
-                    page.click(sel)
-                    logging.info("✅ Check-In clicked successfully")
-                    page.wait_for_timeout(random.randint(2000, 3000))
-                    return True
+        # The check-in / check-out is a single toggle button with ID ZPAtt_check_in_out
+        btn_selector = "#ZPAtt_check_in_out"
 
-        elif action == "checkout":
-            selectors = [
+        if page.is_visible(btn_selector):
+            btn_text = page.inner_text(btn_selector).strip().lower()
+            logging.info(f"Attendance button found — text: '{btn_text}'")
+
+            if action == "checkin" and "check-in" in btn_text:
+                page.click(btn_selector)
+                logging.info("✅ Check-In clicked successfully")
+                page.wait_for_timeout(random.randint(2000, 3000))
+                return True
+            elif action == "checkout" and "check-out" in btn_text:
+                page.click(btn_selector)
+                logging.info("✅ Check-Out clicked successfully")
+                page.wait_for_timeout(random.randint(2000, 3000))
+                return True
+            else:
+                logging.warning(
+                    f"Button says '{btn_text}' but action is '{action}'. "
+                    f"Already {'checked in' if action == 'checkin' else 'checked out'}?"
+                )
+                return False
+        else:
+            # Fallback selectors
+            fallback_selectors = [
+                "text=Check-in",
+                "text=Check-out",
+                "text=Check In",
                 "text=Check Out",
-                "button:has-text('Check Out')",
-                "[data-action='checkout']",
-                ".checkout-btn",
+                "button:has-text('Check')",
             ]
-            for sel in selectors:
+            for sel in fallback_selectors:
                 if page.is_visible(sel):
-                    page.click(sel)
-                    logging.info("✅ Check-Out clicked successfully")
-                    page.wait_for_timeout(random.randint(2000, 3000))
-                    return True
+                    sel_text = page.inner_text(sel).strip().lower()
+                    if action == "checkin" and "in" in sel_text:
+                        page.click(sel)
+                        logging.info(f"✅ Check-In clicked via fallback: {sel}")
+                        page.wait_for_timeout(random.randint(2000, 3000))
+                        return True
+                    elif action == "checkout" and "out" in sel_text:
+                        page.click(sel)
+                        logging.info(f"✅ Check-Out clicked via fallback: {sel}")
+                        page.wait_for_timeout(random.randint(2000, 3000))
+                        return True
 
         logging.warning(f"Could not find {action} button. Check screenshot.")
         return False
@@ -215,7 +172,7 @@ def run_bot():
         page = context.new_page()
 
         # Check if session is still valid
-        page.goto("https://people.zoho.com/home", timeout=30000)
+        page.goto(ZOHO_PEOPLE_URL, timeout=30000)
         page.wait_for_timeout(4000)
 
         if "signin" in page.url or "accounts.zoho" in page.url:
