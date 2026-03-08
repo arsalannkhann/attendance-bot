@@ -94,7 +94,7 @@ def login_and_save_session(playwright):
         page.wait_for_timeout(random.randint(1000, 2000))
 
         # Enter email
-        page.fill("input[name='login_id']", ZOHO_EMAIL)
+        page.fill("input#login_id", ZOHO_EMAIL)
         page.wait_for_timeout(random.randint(500, 1000))
         page.click("#nextbtn")
         page.wait_for_timeout(random.randint(2000, 3000))
