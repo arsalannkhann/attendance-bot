@@ -91,18 +91,18 @@ scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
 # Check-in at 2:00 PM IST daily
 scheduler.add_job(
     run_checkin,
-    CronTrigger(hour=14, minute=0, timezone="Asia/Kolkata"),
+    CronTrigger(hour=14, minute=0, day_of_week="mon-fri", timezone="Asia/Kolkata"),
     id="checkin",
-    name="Daily Check-In at 2:00 PM IST",
+    name="Mon-Fri Check-In at 2:00 PM IST",
     replace_existing=True,
 )
 
 # Check-out at 11:59 PM IST daily
 scheduler.add_job(
     run_checkout,
-    CronTrigger(hour=23, minute=59, timezone="Asia/Kolkata"),
+    CronTrigger(hour=23, minute=59, day_of_week="mon-fri", timezone="Asia/Kolkata"),
     id="checkout",
-    name="Daily Check-Out at 11:59 PM IST",
+    name="Mon-Fri Check-Out at 11:59 PM IST",
     replace_existing=True,
 )
 
