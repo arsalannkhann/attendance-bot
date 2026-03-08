@@ -1,101 +1,141 @@
-# Zoho Attendance Bot 🤖
+<div align="center">
 
-Automated check-in / check-out for Zoho People — runs on **Render** (or locally via cron).
+# 🤖 Zoho Attendance Bot
 
-## Schedule
+**Automated check-in & check-out for Zoho People — runs 24/7 on Render**
 
-| Action      | Time (IST)  | Daily |
-|-------------|-------------|-------|
-| ✅ Check-In  | 2:00 PM     | Yes   |
-| 🚪 Check-Out | 11:59 PM    | Yes   |
-
-A random 30s–3min human-like delay is added before each action.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 
 ---
 
-## Deploy to Render (Recommended)
+`2:00 PM IST → Check-In` · `11:59 PM IST → Check-Out` · `Mon–Fri` · `Fully Automated`
+
+</div>
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|:---:|---|
+| 🕐 | **Scheduled attendance** — Check-in at 2:00 PM, check-out at 11:59 PM IST |
+| 📅 | **Weekdays only** — Runs Monday through Friday |
+| 🧠 | **Smart toggle** — Detects button state, won't double check-in/out |
+| 🔄 | **Session management** — Saves login session, auto-refreshes on expiry |
+| 🫀 | **Self-ping keep-alive** — 10-min ping prevents Render free-tier shutdown |
+| 🕵️ | **Human-like delays** — Random 30s–3min delay before each action |
+| 📸 | **Screenshot proof** — Captures page state before every action |
+
+---
+
+## 🚀 Deploy to Render
 
 ### 1. Push to GitHub
 
 ```bash
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/YOUR_USERNAME/attendance-bot.git
+git init && git add . && git commit -m "init"
+git remote add origin https://github.com/YOUR_USERNAME/zoho-bot.git
 git push -u origin main
 ```
 
-### 2. Create Render Web Service
+### 2. Create Web Service on Render
 
-1. Go to [render.com](https://render.com) → **New → Web Service**
-2. Connect your GitHub repo
-3. Settings:
-   - **Environment**: Docker
-   - **Plan**: Free
-   - **Region**: Oregon (or closest to you)
+> **[render.com](https://render.com)** → New → Web Service → Connect repo
+
+| Setting | Value |
+|---|---|
+| **Runtime** | Docker |
+| **Plan** | Free |
+| **Branch** | `main` |
+| **Health Check** | `/health` |
 
 ### 3. Set Environment Variables
 
-In Render dashboard → **Environment** tab, add:
+| Variable | Value |
+|---|---|
+| `ZOHO_EMAIL` | Your Zoho email |
+| `ZOHO_PASSWORD` | Your Zoho password |
+| `RENDER_EXTERNAL_URL` | `https://your-app.onrender.com` *(set after first deploy)* |
 
-| Key                    | Value                              |
-|------------------------|------------------------------------|
-| `ZOHO_EMAIL`           | your_zoho_email@company.com        |
-| `ZOHO_PASSWORD`        | your_zoho_password                 |
-| `OUTLOOK_EMAIL`        | your_outlook_email@outlook.com     |
-| `OUTLOOK_APP_PASSWORD` | your_outlook_app_password          |
-| `RENDER_EXTERNAL_URL`  | *(auto-set by Render after deploy)*|
+> ⚠️ **Important:** Set `RENDER_EXTERNAL_URL` to your Render URL after the first deploy. This enables the self-ping keep-alive.
 
-> **Important:** After first deploy, copy the Render URL (e.g. `https://zoho-attendance-bot.onrender.com`) and set it as `RENDER_EXTERNAL_URL`. This enables the 10-min self-ping keep-alive.
+### 4. Deploy 🎉
 
-### 4. Deploy
-
-Render auto-deploys on `git push`. The bot will:
+Render auto-deploys on every `git push`. The bot will:
 - Start a web server on port `5000`
-- Schedule check-in at 2:00 PM IST & check-out at 11:59 PM IST
-- Self-ping every 10 minutes to prevent idle shutdown
+- Schedule check-in/check-out (Mon–Fri, IST)
+- Self-ping every 10 minutes
 
 ---
 
-## Run Locally (Mac)
+## 🏗️ Architecture
 
-### Setup
-
-```bash
-bash setup.sh        # Install dependencies
+```
+┌─────────────────────────────────────────────┐
+│              Render (Docker)                │
+│                                             │
+│  ┌──────────┐    ┌────────────────────────┐ │
+│  │ Flask    │    │ APScheduler            │ │
+│  │ /health  │◄───│                        │ │
+│  │ /        │    │ 2:00 PM  → check-in    │ │
+│  └──────────┘    │ 11:59 PM → check-out   │ │
+│       ▲          │ Every 10m → self-ping   │ │
+│       │          └────────┬───────────────┘ │
+│       │                   │                 │
+│  Self-ping           ┌────▼─────┐           │
+│  (keep alive)        │ zoho_bot │           │
+│                      │ Playwright│          │
+│                      └────┬─────┘           │
+└───────────────────────────┼─────────────────┘
+                            │
+                   ┌────────▼────────┐
+                   │  Zoho People    │
+                   │  people.zoho.in │
+                   └─────────────────┘
 ```
 
-### Option A: Cron (recommended for local)
+---
 
-```bash
-bash setup_cron.sh   # Installs cron jobs
+## 📁 Project Structure
+
+```
+attendance_bot/
+├── server.py          # Flask + APScheduler (entry point for Render)
+├── zoho_bot.py        # Core bot — login, session, attendance
+├── Dockerfile         # Python 3.11 + Chromium
+├── render.yaml        # Render blueprint
+├── requirements.txt   # Python dependencies
+├── .gitignore         # Excludes secrets, logs, screenshots
+└── .env               # Local credentials (not committed)
 ```
 
-### Option B: Run server locally
+---
+
+## 🛠️ Local Development
 
 ```bash
+# Install dependencies
 pip3 install -r requirements.txt
+python3 -m playwright install chromium
+
+# Run directly
+ZOHO_ACTION=checkin python3 zoho_bot.py
+
+# Run server locally
 python3 server.py
 ```
 
 ---
 
-## Files
+## 📝 Logs
 
-| File               | Purpose                                    |
-|--------------------|--------------------------------------------|
-| `server.py`        | Flask server + scheduler (for Render)      |
-| `zoho_bot.py`      | Core bot logic (login, OTP, attendance)    |
-| `Dockerfile`       | Docker config for Render deployment        |
-| `render.yaml`      | Render blueprint for one-click deploy      |
-| `setup.sh`         | Local Mac setup script                     |
-| `setup_cron.sh`    | Local cron job setup                       |
-| `requirements.txt` | Python dependencies                        |
-| `.env`             | Local credentials (not committed)          |
+- **Render** → Dashboard → Logs tab
+- **Local** → `bot.log`
 
 ---
 
-## Logs
+<div align="center">
 
-- **Render**: View logs in the Render dashboard
-- **Local**: Check `bot.log` and `cron.log`
+Made with ❤️ for automating the mundane
+
+</div>
