@@ -47,19 +47,28 @@ def login_and_save_session(playwright):
     page = context.new_page()
 
     try:
-        page.goto("https://accounts.zoho.com/signin", timeout=30000)
+        logging.info("Navigating to Zoho sign-in page...")
+        page.goto("https://accounts.zoho.in/signin", timeout=30000)
         page.wait_for_timeout(random.randint(1000, 2000))
 
         # Enter email
+        logging.info(f"Filling email: {ZOHO_EMAIL}")
+        page.wait_for_selector("input#login_id", state="visible", timeout=20000)
         page.fill("input#login_id", ZOHO_EMAIL)
         page.wait_for_timeout(random.randint(500, 1000))
         page.click("#nextbtn")
-        page.wait_for_timeout(random.randint(2000, 3000))
-
+        
+        # Wait for password field (specifically for visibility)
+        logging.info("Waiting for password field to become visible...")
+        page.wait_for_selector("input#password", state="visible", timeout=30000)
+        
         # Enter password
+        logging.info("Filling password...")
         page.fill("input#password", ZOHO_PASSWORD)
         page.wait_for_timeout(random.randint(500, 1000))
         page.click("#nextbtn")
+        
+        logging.info("Waiting for login completion...")
         page.wait_for_timeout(random.randint(5000, 8000))
 
         # Save session
