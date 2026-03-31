@@ -31,23 +31,6 @@ def health():
     return jsonify({"status": "ok"})
 
 
-@app.route("/run/<action>")
-def run_action(action):
-    """Manually trigger a checkin or checkout for testing."""
-    if action not in ["checkin", "checkout"]:
-        return jsonify({"error": "Invalid action. Use 'checkin' or 'checkout'"}), 400
-
-    import datetime
-    
-    # We add a one-off job to the scheduler to run immediately
-    if action == "checkin":
-        scheduler.add_job(run_checkin, 'date', run_date=datetime.datetime.now(), id=f"manual_{action}")
-    else:
-        scheduler.add_job(run_checkout, 'date', run_date=datetime.datetime.now(), id=f"manual_{action}")
-        
-    return jsonify({"status": f"Scheduled immediate {action}"})
-
-
 # ────────────────────────────────────────────
 # Self-ping every 10 minutes to keep Render
 # free-tier instance from spinning down
