@@ -90,13 +90,19 @@ def perform_attendance(page):
         page.goto(ZOHO_PEOPLE_URL, timeout=30000)
         page.wait_for_timeout(random.randint(4000, 6000))
 
+        # The check-in / check-out is a single toggle button with ID ZPAtt_check_in_out
+        btn_selector = "#ZPAtt_check_in_out"
+
+        # Wait up to 15 seconds for the widget to load
+        try:
+            page.wait_for_selector(btn_selector, state="visible", timeout=15000)
+        except Exception:
+            pass
+
         # Take screenshot for proof (before clicking)
         screenshot_path = Path(__file__).parent / f"{action}_{int(time.time())}.png"
         page.screenshot(path=str(screenshot_path))
         logging.info(f"Screenshot saved: {screenshot_path}")
-
-        # The check-in / check-out is a single toggle button with ID ZPAtt_check_in_out
-        btn_selector = "#ZPAtt_check_in_out"
 
         if page.is_visible(btn_selector):
             btn_text = page.inner_text(btn_selector).strip().lower()
