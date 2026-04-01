@@ -1,6 +1,6 @@
 # Zoho People Attendance — GitHub Actions
 
-Automatically checks in at **12:00 PM IST** and checks out at **11:55 PM IST**, Monday–Friday. No laptop required.
+Automatically checks in at **12:00 PM IST** and checks out at **10:00 PM IST**, Monday–Friday. No laptop required.
 
 ## Repository structure
 
@@ -50,7 +50,7 @@ Watch the logs — you should see `CHECK-IN successful!` or `CHECK-OUT successfu
 | Job       | IST time  | UTC cron       |
 |-----------|-----------|----------------|
 | Check-in  | 12:00 PM  | `30 6 * * 1-5` |
-| Check-out | 11:55 PM  | `25 18 * * 1-5`|
+| Check-out | 10:00 PM  | `30 16 * * 1-5`|
 
 > GitHub Actions cron may run up to ~5 minutes late under high load — this is normal and acceptable.
 

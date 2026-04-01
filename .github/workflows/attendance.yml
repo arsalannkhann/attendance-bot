@@ -3,14 +3,14 @@ name: Zoho People Attendance
 # ─────────────────────────────────────────────────────────────────────────────
 # IST = UTC + 5:30
 #   Check-in  12:00 PM IST  →  06:30 UTC
-#   Check-out 11:55 PM IST  →  18:25 UTC
+#   Check-out 10:00 PM IST  →  16:30 UTC
 #
 # GitHub Actions cron uses UTC. Mon–Fri only (1-5).
 # ─────────────────────────────────────────────────────────────────────────────
 on:
   schedule:
     - cron: '30 6 * * 1-5'   # 12:00 PM IST  — check-in
-    - cron: '25 18 * * 1-5'  # 11:55 PM IST  — check-out
+    - cron: '30 16 * * 1-5'  # 10:00 PM IST  — check-out
 
   # Allow manual trigger from GitHub UI (Actions tab → Run workflow)
   workflow_dispatch:
@@ -51,7 +51,7 @@ jobs:
         run: echo "ACTION=checkin" >> $GITHUB_ENV
 
       - name: Set ACTION for check-out trigger
-        if: github.event_name == 'schedule' && github.event.schedule == '25 18 * * 1-5'
+        if: github.event_name == 'schedule' && github.event.schedule == '30 16 * * 1-5'
         run: echo "ACTION=checkout" >> $GITHUB_ENV
 
       - name: Set ACTION from manual input

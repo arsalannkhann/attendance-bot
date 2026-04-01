@@ -93,7 +93,7 @@ def post_attendance(cfg: dict, action: str):
         params = {"dateFormat": ZOHO_FMT, "emailId": cfg["email_id"], "checkIn": ts}
         label  = "CHECK-IN"
     else:
-        ts     = build_timestamp(23, 55)
+        ts     = build_timestamp(22, 0)
         params = {"dateFormat": ZOHO_FMT, "emailId": cfg["email_id"], "checkOut": ts}
         label  = "CHECK-OUT"
 
@@ -131,10 +131,10 @@ def main():
     if action not in ("checkin", "checkout"):
         utc_hour = datetime.utcnow().hour
         # 12:00 IST = 06:30 UTC  → hours 6–7 → checkin
-        # 23:55 IST = 18:25 UTC  → hours 18–19 → checkout
+        # 22:00 IST = 16:30 UTC  → hours 16–17 → checkout
         if 6 <= utc_hour <= 7:
             action = "checkin"
-        elif 18 <= utc_hour <= 19:
+        elif 16 <= utc_hour <= 17:
             action = "checkout"
         else:
             log.error(
