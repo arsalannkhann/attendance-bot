@@ -34,7 +34,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install playwright pytz
+        run: pip install playwright pytz pyotp
 
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps
@@ -55,6 +55,7 @@ jobs:
         env:
           ZOHO_EMAIL:        ${{ secrets.ZOHO_EMAIL }}
           ZOHO_PASSWORD:     ${{ secrets.ZOHO_PASSWORD }}
+          ZOHO_TOTP:         ${{ secrets.ZOHO_TOTP }}
           ACTION:            ${{ env.ACTION }}
         run: python zoho_browser.py
 

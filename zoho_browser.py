@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-zoho_browser.py — Zoho People attendance via browser automation using App Password.
+zoho_browser.py — Zoho People attendance via browser automation using App Password or TOTP.
 
 GitHub Secrets required:
   ZOHO_EMAIL       – your Zoho login email
-  ZOHO_PASSWORD    – your Zoho App Password (bypasses OTP)
+  ZOHO_PASSWORD    – your primary Zoho password
+  ZOHO_TOTP        – your TOTP secret (if MFA is enabled)
 
 Optional:
   ACTION           – checkin | checkout (auto-detected from UTC hour if omitted)
@@ -16,6 +17,7 @@ import time
 import logging
 from datetime import datetime, timezone
 import pytz
+import pyotp
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 logging.basicConfig(
@@ -38,6 +40,7 @@ def load_config() -> dict:
     return {
         "zoho_email":  os.environ["ZOHO_EMAIL"],
         "zoho_pass":   os.environ["ZOHO_PASSWORD"],
+        "totp_secret": os.environ.get("ZOHO_TOTP", ""),
         "action":      os.environ.get("ACTION", "").lower(),
     }
 
@@ -65,18 +68,32 @@ def run(cfg: dict, action: str):
             page.click("button#nextbtn")
             log.info("Email entered and Next clicked.")
 
-            # ── 3. Enter App Password ──────────────────────────────────────
-            # Since this is an App Password, Zoho trusts it and skips OTP/Device Verification!
+            # ── 3. Enter Primary Password ─────────────────────────────────
             page.wait_for_selector("#password", timeout=10000)
             page.fill("#password", cfg["zoho_pass"])
             page.click("button#nextbtn")
-            log.info("App Password submitted and Sign in clicked.")
+            log.info("Password submitted and Sign in clicked.")
 
-            # ── 4. Wait for dashboard and widget ──────────────────────────
+            # ── 4. Enter TOTP (if required) ───────────────────────────────
+            if cfg["totp_secret"]:
+                try:
+                    # Wait briefly to see if OTP prompt appears
+                    otp_selector = "input[placeholder*='OTP' i], input[placeholder*='code' i], input[name='code'], #otp_field, input[type='tel']"
+                    page.wait_for_selector(otp_selector, timeout=8000)
+                    log.info("MFA screen detected. Generating TOTP code ...")
+                    totp = pyotp.TOTP(cfg["totp_secret"])
+                    current_code = totp.now()
+                    page.fill(otp_selector, current_code)
+                    page.keyboard.press("Enter")
+                    log.info(f"TOTP {current_code} submitted.")
+                except PWTimeout:
+                    log.info("No MFA prompt detected — continuing.")
+
+            # ── 5. Wait for dashboard and widget ──────────────────────────
             page.wait_for_selector('//*[@id="ZPAtt_check_in_out"]', timeout=30000)
             log.info("Logged in successfully. Attendance widget found.")
 
-            # ── 5. Click attendance button ────────────────────────────────
+            # ── 6. Click attendance button ────────────────────────────────
             log.info(f"Checking current state for: {action} …")
             button_locator = page.locator('//*[@id="ZPAtt_check_in_out"]')
             btn_text = button_locator.inner_text().strip().lower()
