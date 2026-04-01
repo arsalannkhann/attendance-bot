@@ -1,141 +1,98 @@
-<div align="center">
+# Zoho People Attendance — GitHub Actions
 
-# 🤖 Zoho Attendance Bot
+Automatically checks in at **12:00 PM IST** and checks out at **11:55 PM IST**, Monday–Friday. No laptop required.
 
-**Automated check-in & check-out for Zoho People — runs 24/7 on Render**
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
-
----
-
-`2:00 PM IST → Check-In` · `11:59 PM IST → Check-Out` · `Mon–Fri` · `Fully Automated`
-
-</div>
-
----
-
-## ✨ Features
-
-| Feature | Description |
-|:---:|---|
-| 🕐 | **Scheduled attendance** — Check-in at 2:00 PM, check-out at 11:59 PM IST |
-| 📅 | **Weekdays only** — Runs Monday through Friday |
-| 🧠 | **Smart toggle** — Detects button state, won't double check-in/out |
-| 🔄 | **Session management** — Saves login session, auto-refreshes on expiry |
-| 🫀 | **Self-ping keep-alive** — 10-min ping prevents Render free-tier shutdown |
-| 🕵️ | **Human-like delays** — Random 30s–3min delay before each action |
-| 📸 | **Screenshot proof** — Captures page state before every action |
-
----
-
-## 🚀 Deploy to Render
-
-### 1. Push to GitHub
-
-```bash
-git init && git add . && git commit -m "init"
-git remote add origin https://github.com/YOUR_USERNAME/zoho-bot.git
-git push -u origin main
-```
-
-### 2. Create Web Service on Render
-
-> **[render.com](https://render.com)** → New → Web Service → Connect repo
-
-| Setting | Value |
-|---|---|
-| **Runtime** | Docker |
-| **Plan** | Free |
-| **Branch** | `main` |
-| **Health Check** | `/health` |
-
-### 3. Set Environment Variables
-
-| Variable | Value |
-|---|---|
-| `ZOHO_EMAIL` | Your Zoho email |
-| `ZOHO_PASSWORD` | Your Zoho password |
-| `RENDER_EXTERNAL_URL` | `https://your-app.onrender.com` *(set after first deploy)* |
-
-> ⚠️ **Important:** Set `RENDER_EXTERNAL_URL` to your Render URL after the first deploy. This enables the self-ping keep-alive.
-
-### 4. Deploy 🎉
-
-Render auto-deploys on every `git push`. The bot will:
-- Start a web server on port `5000`
-- Schedule check-in/check-out (Mon–Fri, IST)
-- Self-ping every 10 minutes
-
----
-
-## 🏗️ Architecture
+## Repository structure
 
 ```
-┌─────────────────────────────────────────────┐
-│              Render (Docker)                │
-│                                             │
-│  ┌──────────┐    ┌────────────────────────┐ │
-│  │ Flask    │    │ APScheduler            │ │
-│  │ /health  │◄───│                        │ │
-│  │ /        │    │ 2:00 PM  → check-in    │ │
-│  └──────────┘    │ 11:59 PM → check-out   │ │
-│       ▲          │ Every 10m → self-ping   │ │
-│       │          └────────┬───────────────┘ │
-│       │                   │                 │
-│  Self-ping           ┌────▼─────┐           │
-│  (keep alive)        │ zoho_bot │           │
-│                      │ Playwright│          │
-│                      └────┬─────┘           │
-└───────────────────────────┼─────────────────┘
-                            │
-                   ┌────────▼────────┐
-                   │  Zoho People    │
-                   │  people.zoho.in │
-                   └─────────────────┘
+├── run_once.py                        # The script (reads env vars)
+├── requirements.txt
+└── .github/
+    └── workflows/
+        └── attendance.yml             # Cron workflow
 ```
 
----
+## Setup (5 minutes)
 
-## 📁 Project Structure
+### 1. Create a private GitHub repository
 
+Keep it private — your Zoho credentials live here as Secrets.
+
+### 2. Add your files
+
+Push all files from this folder to the repo root.
+
+### 3. Add GitHub Secrets
+
+Go to: **Repo → Settings → Secrets and variables → Actions → New repository secret**
+
+Add these four secrets:
+
+| Secret name           | Value                              |
+|-----------------------|------------------------------------|
+| `ZOHO_CLIENT_ID`      | `1000.3K4NRW...`                   |
+| `ZOHO_CLIENT_SECRET`  | `44141658...`                      |
+| `ZOHO_REFRESH_TOKEN`  | `1000.xxxx.yyyy` (from token exchange) |
+| `ZOHO_EMAIL_ID`       | `you@company.com`                  |
+
+### 4. Enable Actions
+
+Go to **Repo → Actions** and click **"I understand my workflows, go ahead and enable them"** if prompted.
+
+### 5. Test manually
+
+Go to **Actions → Zoho People Attendance → Run workflow** → choose `checkin` or `checkout` → click **Run workflow**.
+
+Watch the logs — you should see `CHECK-IN successful!` or `CHECK-OUT successful!`.
+
+## Schedule
+
+| Job       | IST time  | UTC cron       |
+|-----------|-----------|----------------|
+| Check-in  | 12:00 PM  | `30 6 * * 1-5` |
+| Check-out | 11:55 PM  | `25 18 * * 1-5`|
+
+> GitHub Actions cron may run up to ~5 minutes late under high load — this is normal and acceptable.
+
+## Monitoring
+
+- Each run appears in **Actions** tab with full logs
+- Failed runs are shown in red — GitHub emails you by default if a scheduled job fails (check your GitHub notification settings)
+- Logs show the exact timestamp posted to Zoho
+
+## Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `Missing required environment variables` | Check all 4 secrets are added correctly |
+| `Token refresh failed` | Refresh token expired or wrong — redo the token exchange |
+| `401 Unauthorized` | Wrong client ID/secret, or scope missing |
+| `Attendance API error` | Check Zoho People portal — duplicate entry or policy issue |
+| Workflow not triggering | Check Actions is enabled; GitHub may skip crons on inactive repos — push a commit to wake it up |
+
+## Keeping the repo active
+
+GitHub disables scheduled workflows on repos with **no activity for 60 days**. To prevent this, either:
+- Push a trivial commit every month, or
+- Star your own repo (doesn't count), or
+- Add a `keep-alive` workflow that runs weekly and commits a timestamp file
+
+```yaml
+# .github/workflows/keep-alive.yml
+name: Keep alive
+on:
+  schedule:
+    - cron: '0 0 * * 0'   # Every Sunday midnight UTC
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          echo "$(date -u)" > .keepalive
+          git add .keepalive
+          git commit -m "chore: keep-alive [skip ci]" || echo "Nothing to commit"
+          git push
 ```
-attendance_bot/
-├── server.py          # Flask + APScheduler (entry point for Render)
-├── zoho_bot.py        # Core bot — login, session, attendance
-├── Dockerfile         # Python 3.11 + Chromium
-├── render.yaml        # Render blueprint
-├── requirements.txt   # Python dependencies
-├── .gitignore         # Excludes secrets, logs, screenshots
-└── .env               # Local credentials (not committed)
-```
-
----
-
-## 🛠️ Local Development
-
-```bash
-# Install dependencies
-pip3 install -r requirements.txt
-python3 -m playwright install chromium
-
-# Run directly
-ZOHO_ACTION=checkin python3 zoho_bot.py
-
-# Run server locally
-python3 server.py
-```
-
----
-
-## 📝 Logs
-
-- **Render** → Dashboard → Logs tab
-- **Local** → `bot.log`
-
----
-
-<div align="center">
-
-Made with ❤️ for automating the mundane
-
-</div>

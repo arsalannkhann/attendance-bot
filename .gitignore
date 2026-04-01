@@ -1,27 +1,5 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
-venv/
-env/
-.venv/
-
-# Environment variables
+*.pyc
 .env
-
-# Session data (sensitive)
-session.json
-
-# Logs & screenshots
-*.log
-*.png
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
+config.json
+.keepalive
