@@ -1,98 +1,87 @@
-# Zoho People Attendance — GitHub Actions
+<div align="center">
+  <img src="https://img.icons8.com/color/144/000000/zoho.png" alt="Zoho Logo" width="100"/>
+  <h1>Zoho Attendance Bot (Browser/Playwright)</h1>
+  <p><strong>A fully automated, role-bypassing Zoho People check-in/out bot using Playwright and GitHub Actions.</strong></p>
 
-Automatically checks in at **12:00 PM IST** and checks out at **10:00 PM IST**, Monday–Friday. No laptop required.
+  <p>
+    <img alt="Python" src="https://img.shields.io/badge/Python-3.11+-blue.svg" />
+    <img alt="Playwright" src="https://img.shields.io/badge/Playwright-Browser%20Automation-orange.svg" />
+    <img alt="GitHub Actions" src="https://img.shields.io/badge/GitHub%20Actions-Automated-brightgreen.svg" />
+  </p>
+</div>
 
-## Repository structure
+---
 
+## 🚀 Overview
+
+This repository automates the daily **Check-in** and **Check-out** process for Zoho People. Due to API role restrictions missing `ZOHOPEOPLE.attendance.ALL`, this project uses a genuine **Playwright Chromium browser** run headlessly in the cloud to simulate human logins.
+
+It executes exclusively on Mon–Fri via GitHub Actions Cron expressions configured to your specific local times.
+
+### ⏱️ Schedule (IST = UTC+5:30)
+- **Check-in:** 12:00 PM IST `(06:30 UTC)`
+- **Check-out:** 10:00 PM IST `(16:30 UTC)`
+
+---
+
+## ⚙️ How it Works
+
+```mermaid
+sequenceDiagram
+    participant GH as GitHub Actions (Cron)
+    participant PW as Playwright (Chromium)
+    participant Zoho as Zoho Accounts / People
+
+    GH->>PW: Trigger check-in or check-out
+    Note over PW: Uses ZOHO_EMAIL & ZOHO_PASSWORD
+    PW->>Zoho: Navigate to Sign In URL
+    Zoho-->>PW: Request Password (and TOTP if enabled)
+    PW->>Zoho: Submit Credentials
+    Zoho-->>PW: Redirect to Dashboard
+    PW->>Zoho: Locate #ZPAtt_check_in_out
+    
+    alt Goal = Checkin AND Text = "Check-out"
+        PW->>GH: Skip (Already checked-in)
+    else Goal = Checkin
+        PW->>Zoho: Fire onclick() (Delay 200ms)
+        Zoho-->>PW: Success!
+    end
 ```
-├── run_once.py                        # The script (reads env vars)
-├── requirements.txt
-└── .github/
-    └── workflows/
-        └── attendance.yml             # Cron workflow
-```
 
-## Setup (5 minutes)
+---
 
-### 1. Create a private GitHub repository
+## 🛠️ Repository Setup
 
-Keep it private — your Zoho credentials live here as Secrets.
+### 1. Variables and Secrets
+Before you can run the bot, you need to add your login information. Inside your repository, go to **Settings → Secrets and variables → Actions** and add the following repository secrets:
 
-### 2. Add your files
+| Secret Name | Description | Required? |
+|-------------|-------------|-----------|
+| `ZOHO_EMAIL` | Your Zoho login email address | Yes |
+| `ZOHO_PASSWORD` | Your Zoho password | Yes |
+| `ZOHO_TOTP` | Your TOTP secret code | Only if 2FA/MFA is enabled |
 
-Push all files from this folder to the repo root.
+### 2. Manual Triggers
+You can manually run the workflow at any time if you miss a check-in:
+1. Go to the **Actions** tab in GitHub.
+2. Select **Zoho People Attendance (Browser)** on the left.
+3. Click the **Run workflow** dropdown, choose your action (`checkin` or `checkout`), and run it.
 
-### 3. Add GitHub Secrets
+---
 
-Go to: **Repo → Settings → Secrets and variables → Actions → New repository secret**
+## 📸 Debugging & Snapshots
 
-Add these four secrets:
+If the automation fails (e.g., Zoho changes their login design or an unexpected CAPTCHA appears), the GitHub Action immediately securely uploads a `debug_screenshot.png` artifact to the workflow run.
 
-| Secret name           | Value                              |
-|-----------------------|------------------------------------|
-| `ZOHO_CLIENT_ID`      | `1000.3K4NRW...`                   |
-| `ZOHO_CLIENT_SECRET`  | `44141658...`                      |
-| `ZOHO_REFRESH_TOKEN`  | `1000.xxxx.yyyy` (from token exchange) |
-| `ZOHO_EMAIL_ID`       | `you@company.com`                  |
+To retrieve it:
+1. Go to your failed Action run.
+2. Scroll to the bottom and click on **Artifacts**.
+3. Download `debug-screenshot` to inspect what the browser saw right before it failed.
 
-### 4. Enable Actions
+---
 
-Go to **Repo → Actions** and click **"I understand my workflows, go ahead and enable them"** if prompted.
-
-### 5. Test manually
-
-Go to **Actions → Zoho People Attendance → Run workflow** → choose `checkin` or `checkout` → click **Run workflow**.
-
-Watch the logs — you should see `CHECK-IN successful!` or `CHECK-OUT successful!`.
-
-## Schedule
-
-| Job       | IST time  | UTC cron       |
-|-----------|-----------|----------------|
-| Check-in  | 12:00 PM  | `30 6 * * 1-5` |
-| Check-out | 10:00 PM  | `30 16 * * 1-5`|
-
-> GitHub Actions cron may run up to ~5 minutes late under high load — this is normal and acceptable.
-
-## Monitoring
-
-- Each run appears in **Actions** tab with full logs
-- Failed runs are shown in red — GitHub emails you by default if a scheduled job fails (check your GitHub notification settings)
-- Logs show the exact timestamp posted to Zoho
-
-## Troubleshooting
-
-| Error | Fix |
-|-------|-----|
-| `Missing required environment variables` | Check all 4 secrets are added correctly |
-| `Token refresh failed` | Refresh token expired or wrong — redo the token exchange |
-| `401 Unauthorized` | Wrong client ID/secret, or scope missing |
-| `Attendance API error` | Check Zoho People portal — duplicate entry or policy issue |
-| Workflow not triggering | Check Actions is enabled; GitHub may skip crons on inactive repos — push a commit to wake it up |
-
-## Keeping the repo active
-
-GitHub disables scheduled workflows on repos with **no activity for 60 days**. To prevent this, either:
-- Push a trivial commit every month, or
-- Star your own repo (doesn't count), or
-- Add a `keep-alive` workflow that runs weekly and commits a timestamp file
-
-```yaml
-# .github/workflows/keep-alive.yml
-name: Keep alive
-on:
-  schedule:
-    - cron: '0 0 * * 0'   # Every Sunday midnight UTC
-jobs:
-  ping:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
-          echo "$(date -u)" > .keepalive
-          git add .keepalive
-          git commit -m "chore: keep-alive [skip ci]" || echo "Nothing to commit"
-          git push
-```
+<div align="center">
+  <img src="https://img.icons8.com/?size=100&id=113061&format=png&color=000000" alt="Bot emoji" width="50" style="margin-top: 15px;"/>
+  <br/>
+  <b>Built for automated, hassle-free attendance tracking.</b>
+</div>

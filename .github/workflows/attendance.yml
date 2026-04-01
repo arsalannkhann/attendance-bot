@@ -1,18 +1,14 @@
-name: Zoho People Attendance
+name: Zoho People Attendance (Browser)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IST = UTC + 5:30
-#   Check-in  12:00 PM IST  →  06:30 UTC
-#   Check-out 10:00 PM IST  →  16:30 UTC
-#
-# GitHub Actions cron uses UTC. Mon–Fri only (1-5).
-# ─────────────────────────────────────────────────────────────────────────────
+# IST = UTC+5:30
+#   Check-in  12:00 PM IST = 06:30 UTC
+#   Check-out 10:00 PM IST = 16:30 UTC
+
 on:
   schedule:
-    - cron: '30 6 * * 1-5'   # 12:00 PM IST  — check-in
-    - cron: '30 16 * * 1-5'  # 10:00 PM IST  — check-out
+    - cron: '30 6 * * 1-5'    # 12:00 PM IST — check-in
+    - cron: '30 16 * * 1-5'   # 10:00 PM IST — check-out
 
-  # Allow manual trigger from GitHub UI (Actions tab → Run workflow)
   workflow_dispatch:
     inputs:
       action:
@@ -28,7 +24,7 @@ jobs:
   attendance:
     name: ${{ github.event.inputs.action || 'scheduled' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repo
@@ -40,12 +36,13 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install requests pytz
+      - name: Install Python dependencies
+        run: pip install playwright pytz pyotp
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
 
       # ── Determine action ──────────────────────────────────────────────────
-      # For scheduled runs: set ACTION based on which cron triggered.
-      # For manual runs: use the workflow_dispatch input.
       - name: Set ACTION for check-in trigger
         if: github.event_name == 'schedule' && github.event.schedule == '30 6 * * 1-5'
         run: echo "ACTION=checkin" >> $GITHUB_ENV
@@ -58,29 +55,20 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: echo "ACTION=${{ github.event.inputs.action }}" >> $GITHUB_ENV
 
-      # ── Run script ────────────────────────────────────────────────────────
-      - name: Run attendance script
+      # ── Run browser automation ────────────────────────────────────────────
+      - name: Run attendance automation
         env:
-          CLIENT_ID:     ${{ secrets.ZOHO_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
-          REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
-          EMAIL_ID:      ${{ secrets.ZOHO_EMAIL_ID }}
-          # If your Zoho account is NOT India, change these:
-          ACCOUNTS_URL:  https://accounts.zoho.in
-          API_BASE:      https://people.zoho.in
+          ZOHO_EMAIL:    ${{ secrets.ZOHO_EMAIL }}
+          ZOHO_PASSWORD: ${{ secrets.ZOHO_PASSWORD }}
+          ZOHO_TOTP:     ${{ secrets.ZOHO_TOTP }}     # leave empty if no MFA
           ACTION:        ${{ env.ACTION }}
-        run: python run_once.py
+        run: python zoho_browser.py
 
-      # ── Notify on failure (optional — needs a repo secret NOTIFY_EMAIL) ──
-      # Uncomment if you want email alerts on failures:
-      # - name: Notify on failure
-      #   if: failure()
-      #   uses: dawidd6/action-send-mail@v3
-      #   with:
-      #     server_address: smtp.gmail.com
-      #     server_port: 587
-      #     username: ${{ secrets.NOTIFY_EMAIL }}
-      #     password: ${{ secrets.NOTIFY_PASSWORD }}
-      #     subject: "Zoho attendance job FAILED"
-      #     body: "The ${{ env.ACTION }} job failed. Check https://github.com/${{ github.repository }}/actions"
-      #     to: ${{ secrets.NOTIFY_EMAIL }}
+      # ── Upload debug screenshot on failure ────────────────────────────────
+      - name: Upload debug screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshot
+          path: debug_screenshot.png
+          retention-days: 3
