@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import pytz
 import pyotp
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from outlook import fetch_zoho_mfa_code
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,10 +39,12 @@ def load_config() -> dict:
         sys.exit(1)
     
     return {
-        "zoho_email":  os.environ["ZOHO_EMAIL"],
-        "zoho_pass":   os.environ["ZOHO_PASSWORD"],
-        "totp_secret": os.environ.get("ZOHO_TOTP", ""),
-        "action":      os.environ.get("ACTION", "").lower(),
+        "zoho_email":     os.environ["ZOHO_EMAIL"],
+        "zoho_pass":      os.environ["ZOHO_PASSWORD"],
+        "totp_secret":    os.environ.get("ZOHO_TOTP", ""),
+        "outlook_email":  os.environ.get("OUTLOOK_EMAIL", ""),
+        "outlook_pass":   os.environ.get("OUTLOOK_PASSWORD", ""),
+        "action":         os.environ.get("ACTION", "").lower(),
     }
 
 # ── Browser Automation ────────────────────────────────────────────────────────
@@ -74,20 +77,48 @@ def run(cfg: dict, action: str):
             page.click("button#nextbtn")
             log.info("Password submitted and Sign in clicked.")
 
-            # ── 4. Enter TOTP (if required) ───────────────────────────────
-            if cfg["totp_secret"]:
-                try:
-                    # Wait briefly to see if OTP prompt appears
-                    otp_selector = "input[placeholder*='OTP' i], input[placeholder*='code' i], input[name='code'], #otp_field, input[type='tel']"
-                    page.wait_for_selector(otp_selector, timeout=8000)
-                    log.info("MFA screen detected. Generating TOTP code ...")
+            # ── 4. Enter OTP (TOTP or Email) ──────────────────────────────
+            otp_selector = "input[placeholder*='OTP' i], input[placeholder*='code' i], input[name='code'], #otp_field, input[type='tel']"
+            try:
+                # Wait briefly to see if OTP prompt appears
+                page.wait_for_selector(otp_selector, timeout=10000)
+                log.info("MFA / OTP screen detected.")
+
+                ignore_before_ms = int(time.time() * 1000)
+
+                otp_code = ""
+                if cfg["totp_secret"]:
+                    log.info("Generating TOTP code ...")
                     totp = pyotp.TOTP(cfg["totp_secret"])
-                    current_code = totp.now()
-                    page.fill(otp_selector, current_code)
+                    otp_code = totp.now()
+                elif cfg["outlook_email"] and cfg["outlook_pass"]:
+                    log.info(f"Polling Outlook ({cfg['outlook_email']}) for Zoho verification code ...")
+                    # Give it a few seconds for the email to be sent/delivered
+                    time.sleep(5)
+                    otp_code = fetch_zoho_mfa_code(cfg["outlook_email"], ignore_before_ms)
+                else:
+                    log.error("OTP required but neither ZOHO_TOTP nor Outlook credentials provided.")
+                    raise RuntimeError("OTP required but no source configured.")
+
+                if otp_code:
+                    page.fill(otp_selector, otp_code)
                     page.keyboard.press("Enter")
-                    log.info(f"TOTP {current_code} submitted.")
-                except PWTimeout:
-                    log.info("No MFA prompt detected — continuing.")
+                    log.info(f"OTP {otp_code} submitted.")
+                    
+                    # Check for "Trust this browser" screen
+                    try:
+                        trust_selector = "button:has-text('Trust'), button:has-text('Yes'), #trust_browser"
+                        page.wait_for_selector(trust_selector, timeout=5000)
+                        log.info("Trust browser prompt detected. Clicking Yes/Trust...")
+                        page.click(trust_selector)
+                    except PWTimeout:
+                        pass
+                else:
+                    log.error("Could not retrieve OTP code.")
+                    raise RuntimeError("OTP retrieval failed.")
+
+            except PWTimeout:
+                log.info("No MFA prompt detected — continuing.")
 
             # ── 5. Wait for dashboard and widget ──────────────────────────
             page.wait_for_selector('//*[@id="ZPAtt_check_in_out"]', timeout=30000)
