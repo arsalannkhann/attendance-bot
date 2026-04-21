@@ -138,11 +138,21 @@ def run(cfg: dict, action: str):
             except PWTimeout:
                 log.info("No MFA prompt detected — continuing.")
 
-            # ── 5. Wait for dashboard and widget ──────────────────────────
+            # ── 5. Handle Interstitial Screens (Timezone, etc.) ──────────
+            try:
+                # Look for "Remind me later" or "Update your time zone" indicators
+                remind_selector = "text='Remind me later', text='Remind Me Later'"
+                page.wait_for_selector(remind_selector, timeout=8000)
+                log.info("Interstitial screen detected (e.g. Timezone update). Clicking 'Remind me later'...")
+                page.click(remind_selector)
+            except PWTimeout:
+                pass
+
+            # ── 6. Wait for dashboard and widget ──────────────────────────
             page.wait_for_selector('//*[@id="ZPAtt_check_in_out"]', timeout=30000)
             log.info("Logged in successfully. Attendance widget found.")
 
-            # ── 6. Click attendance button ────────────────────────────────
+            # ── 7. Click attendance button ────────────────────────────────
             log.info(f"Checking current state for: {action} …")
             button_locator = page.locator('//*[@id="ZPAtt_check_in_out"]')
             btn_text = button_locator.inner_text().strip().lower()
