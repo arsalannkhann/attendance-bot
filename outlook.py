@@ -240,6 +240,9 @@ def fetch_zoho_mfa_code(
                     logger.info("[outlook] Zoho MFA code retrieved on attempt %d", attempt)
                     _delete_message(msg_id, token, api_url)
                     return otp
+                elif "new sign-in" in subject:
+                    logger.info("[outlook] Deleting Zoho sign-in alert: %s", subject)
+                    _delete_message(msg_id, token, api_url)
 
         except Exception as exc:
             if attempt == max_retries:
