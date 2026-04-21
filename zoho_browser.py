@@ -72,10 +72,28 @@ def run(cfg: dict, action: str):
             log.info("Email entered and Next clicked.")
 
             # ── 3. Enter Primary Password ─────────────────────────────────
-            page.wait_for_selector("#password", timeout=10000)
-            page.fill("#password", cfg["zoho_pass"])
+            password_selector = "#password, #relogin_password_input"
+            page.wait_for_selector(password_selector, timeout=10000)
+            page.fill(password_selector, cfg["zoho_pass"])
             page.click("button#nextbtn")
             log.info("Password submitted and Sign in clicked.")
+
+            # Check for incorrect password error
+            try:
+                error_selector = "//*[@id='error_msg'] | //*[contains(text(), 'Incorrect password')]"
+                page.wait_for_selector(error_selector, timeout=5000)
+                log.warning("Incorrect password detected! Attempting 'Sign in using email OTP' fallback ...")
+                
+                otp_login_link = "text=Sign in using email OTP"
+                if page.locator(otp_login_link).is_visible():
+                    page.click(otp_login_link)
+                    log.info("Clicked 'Sign in using email OTP'. Waiting for OTP prompt ...")
+                else:
+                    log.error("Password failed and 'Sign in using email OTP' link not found.")
+                    raise RuntimeError("Login failed: Incorrect password and no fallback available.")
+            except PWTimeout:
+                # No password error, proceed normally
+                pass
 
             # ── 4. Enter OTP (TOTP or Email) ──────────────────────────────
             otp_selector = "input[placeholder*='OTP' i], input[placeholder*='code' i], input[name='code'], #otp_field, input[type='tel']"
