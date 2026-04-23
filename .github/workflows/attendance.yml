@@ -42,9 +42,9 @@ jobs:
             echo "ACTION=${{ github.event.inputs.action }}" >> $GITHUB_ENV
           else
             HOUR=$(date -u +'%H')
-            if [ "$HOUR" = "04" ]; then
+            if [ "$HOUR" -ge 4 ] && [ "$HOUR" -lt 12 ]; then
               echo "ACTION=checkin" >> $GITHUB_ENV
-            elif [ "$HOUR" = "14" ]; then
+            elif [ "$HOUR" -ge 14 ] && [ "$HOUR" -le 23 ]; then
               echo "ACTION=checkout" >> $GITHUB_ENV
             fi
           fi

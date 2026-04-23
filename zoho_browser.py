@@ -200,9 +200,9 @@ def main():
 
     action = cfg["action"]
     if action not in ("checkin", "checkout"):
-        # Auto-detect primarily intended for local running/debugging
+        # Broad detection ranges: check-in (10 AM to 5:30 PM IST), check-out (7:30 PM to 5:30 AM IST)
         utc_h  = datetime.utcnow().hour
-        action = "checkin" if 4 <= utc_h <= 7 else "checkout" if 14 <= utc_h <= 17 else ""
+        action = "checkin" if 4 <= utc_h < 12 else "checkout" if 14 <= utc_h <= 23 or utc_h < 1 else ""
         if not action:
             log.error(f"Cannot auto-detect action at UTC hour {utc_h}. Set ACTION explicitly.")
             sys.exit(1)
