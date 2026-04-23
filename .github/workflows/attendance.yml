@@ -6,8 +6,8 @@ name: Zoho People Attendance (Browser)
 
 on:
   schedule:
-    - cron: '30 6 * * 1-5'    # 12:00 PM IST (check-in)
-    - cron: '30 16 * * 1-5'   # 10:00 PM IST (check-out)
+    - cron: '37 6 * * 1-5'    # 12:07 PM IST (check-in)
+    - cron: '37 17 * * 1-5'   # 11:07 PM IST (check-out)
   workflow_dispatch:
     inputs:
       action:
@@ -40,11 +40,11 @@ jobs:
         run: playwright install chromium --with-deps
 
       - name: Set ACTION (check-in)
-        if: github.event_name == 'schedule' && github.event.schedule == '30 6 * * 1-5'
+        if: github.event_name == 'schedule' && github.event.schedule == '37 6 * * 1-5'
         run: echo "ACTION=checkin" >> $GITHUB_ENV
 
       - name: Set ACTION (check-out)
-        if: github.event_name == 'schedule' && github.event.schedule == '30 16 * * 1-5'
+        if: github.event_name == 'schedule' && github.event.schedule == '37 17 * * 1-5'
         run: echo "ACTION=checkout" >> $GITHUB_ENV
 
       - name: Set ACTION (manual)
