@@ -200,8 +200,9 @@ def main():
 
     action = cfg["action"]
     if action not in ("checkin", "checkout"):
+        # Auto-detect primarily intended for local running/debugging
         utc_h  = datetime.utcnow().hour
-        action = "checkin" if 6 <= utc_h <= 7 else "checkout" if 16 <= utc_h <= 17 else ""
+        action = "checkin" if 4 <= utc_h <= 7 else "checkout" if 14 <= utc_h <= 17 else ""
         if not action:
             log.error(f"Cannot auto-detect action at UTC hour {utc_h}. Set ACTION explicitly.")
             sys.exit(1)
@@ -210,6 +211,23 @@ def main():
     if datetime.now(IST).weekday() >= 5:
         log.info("Weekend — skipping.")
         sys.exit(0)
+
+    # ── Wait for Target Time (12 PM / 10 PM IST) ─────────────────────
+    target_hour = 12 if action == "checkin" else 22
+    
+    # Only wait if it's currently earlier than the target
+    now_ist = datetime.now(IST)
+    target_time = now_ist.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+    
+    if now_ist < target_time:
+        wait_seconds = (target_time - now_ist).total_seconds()
+        log.info(f"Triggered early. Waiting {wait_seconds/60:.1f} minutes until {target_hour}:00 IST...")
+        time.sleep(wait_seconds)
+    elif now_ist > target_time.replace(hour=target_hour + 1):
+        # If we are more than 1 hour late, we don't wait obviously, but we proceed
+        log.info(f"Running late (Current: {now_ist.strftime('%H:%M')} IST). Proceeding immediately.")
+    else:
+        log.info(f"Near target time ({now_ist.strftime('%H:%M')} IST). Proceeding.")
 
     log.info(f"Action : {action}")
     log.info(f"Email  : {cfg['zoho_email']}")
