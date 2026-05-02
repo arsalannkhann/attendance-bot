@@ -3,3 +3,7 @@ __pycache__/
 .env
 config.json
 .keepalive
+debug_screenshot.png
+/tmp/
+.venv/
+venv/

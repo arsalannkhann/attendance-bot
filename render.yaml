@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: zoho-attendance-bot
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: TZ
+        value: Asia/Kolkata
+      - key: CHECKIN_HOUR
+        value: "12"
+      - key: CHECKIN_MIN
+        value: "0"
+      - key: CHECKOUT_HOUR
+        value: "22"
+      - key: CHECKOUT_MIN
+        value: "0"
+      - key: SELF_PING_INTERVAL
+        value: "600"
+      # Required — set in the Render dashboard (or via Blueprint sync prompt):
+      - key: ZOHO_EMAIL
+        sync: false
+      - key: ZOHO_PASSWORD
+        sync: false
+      # MFA — set ONE of these pairs:
+      - key: ZOHO_TOTP
+        sync: false
+      - key: OUTLOOK_EMAIL
+        sync: false
+      - key: OUTLOOK_PASSWORD
+        sync: false
+      # SELF_PING_URL is auto-derived from RENDER_EXTERNAL_URL — leave unset
+      # unless you want to ping a custom URL.
+      # Optional: protects POST /run from random callers.
+      - key: TRIGGER_TOKEN
+        generateValue: true
