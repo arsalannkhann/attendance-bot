@@ -1,4 +1,7 @@
-playwright>=1.44.0
+# Pin to match the Playwright base image in Dockerfile — these MUST move
+# together. The base image ships only the Chromium build that matches its
+# Playwright tag; bumping pip past the image tag breaks `chromium.launch`.
+playwright==1.59.0
 pytz>=2024.1
 tzdata>=2024.1
 pyotp>=2.9.0

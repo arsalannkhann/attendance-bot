@@ -1,6 +1,6 @@
 # Playwright base image ships Chromium + all required system libraries —
 # avoids the brittle apt-get dance and wins ~90s of cold-start time.
-FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.59.0-jammy
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
