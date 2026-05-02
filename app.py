@@ -56,10 +56,16 @@ SELF_PING_INTERVAL = int(os.environ.get("SELF_PING_INTERVAL", "600"))  # 10 min
 scheduler = BackgroundScheduler(timezone=IST)
 
 
-def _scheduled_job(action: str) -> None:
-    log.info("Scheduler firing: %s", action)
+def _scheduled_job(action: str, *, force: bool = False) -> None:
+    log.info("Scheduler firing: %s (force=%s)", action, force)
     try:
-        result = run_attendance(action)  # type: ignore[arg-type]
+        # Manual/forced runs skip the weekend gate AND the humanising jitter
+        # so smoke tests give immediate, deterministic feedback.
+        result = run_attendance(  # type: ignore[arg-type]
+            action,
+            jitter_seconds=0 if force else 60,
+            skip_weekend_check=force,
+        )
         log.info("Scheduler job %s done: %s", action, result)
     except Exception as exc:
         log.exception("Scheduler job %s failed: %s", action, exc)
@@ -152,12 +158,15 @@ def status() -> dict[str, Any]:
 
 @app.post("/run")
 def manual_run(
-    action: str = Query(..., regex="^(checkin|checkout)$"),
+    action: str = Query(..., pattern="^(checkin|checkout)$"),
+    force: bool = Query(False, description="Bypass weekend check and jitter (smoke tests)"),
     x_trigger_token: str | None = Header(default=None, alias="X-Trigger-Token"),
-) -> dict[str, str]:
+) -> dict[str, str | bool]:
     if TRIGGER_TOKEN and x_trigger_token != TRIGGER_TOKEN:
         raise HTTPException(status_code=401, detail="invalid trigger token")
     threading.Thread(
-        target=_scheduled_job, kwargs={"action": action}, daemon=True
+        target=_scheduled_job,
+        kwargs={"action": action, "force": force},
+        daemon=True,
     ).start()
-    return {"status": "started", "action": action}
+    return {"status": "started", "action": action, "force": force}

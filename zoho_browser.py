@@ -187,17 +187,24 @@ def _do_attendance(cfg: dict, action: Action) -> str:
                 pass
 
 
-def run_attendance(action: Action, *, retries: int = 3, jitter_seconds: int = 60) -> str:
+def run_attendance(
+    action: Action,
+    *,
+    retries: int = 3,
+    jitter_seconds: int = 60,
+    skip_weekend_check: bool = False,
+) -> str:
     """Public entry point used by the scheduler.
 
     Skips on weekends, applies a small humanising jitter, retries transient
     failures with exponential backoff. Returns the result string from the
-    underlying attempt.
+    underlying attempt. Pass ``skip_weekend_check=True`` for forced manual
+    smoke tests on Sat/Sun.
     """
     if action not in ("checkin", "checkout"):
         raise ValueError(f"Invalid action: {action}")
 
-    if datetime.now(IST).weekday() >= 5:
+    if not skip_weekend_check and datetime.now(IST).weekday() >= 5:
         log.info("Weekend — skipping %s", action)
         return "weekend-skip"
 
