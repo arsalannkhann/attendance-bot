@@ -9,6 +9,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# tzdata so Python's stdlib `zoneinfo` can resolve "Asia/Kolkata" from the
+# filesystem; pip-level `tzdata` in requirements.txt is the in-process fallback.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+ && echo $TZ > /etc/timezone
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 

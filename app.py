@@ -21,8 +21,8 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-import pytz
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -36,7 +36,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("app")
 
-IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
 
 CHECKIN_HOUR = int(os.environ.get("CHECKIN_HOUR", "12"))
 CHECKIN_MIN = int(os.environ.get("CHECKIN_MIN", "0"))
