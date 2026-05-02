@@ -11,11 +11,14 @@ WORKDIR /app
 
 # tzdata so Python's stdlib `zoneinfo` can resolve "Asia/Kolkata" from the
 # filesystem; pip-level `tzdata` in requirements.txt is the in-process fallback.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends tzdata \
- && rm -rf /var/lib/apt/lists/* \
+# DEBIAN_FRONTEND=noninteractive + preseeding /etc/timezone *before* install
+# so tzdata's postinst skips the interactive Area/City debconf prompt.
+RUN echo "$TZ" > /etc/timezone \
+ && DEBIAN_FRONTEND=noninteractive apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata \
  && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
- && echo $TZ > /etc/timezone
+ && dpkg-reconfigure -f noninteractive tzdata \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
