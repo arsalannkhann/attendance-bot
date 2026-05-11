@@ -56,15 +56,55 @@ def _load_config() -> dict:
     }
 
 
+_HINT_JS = """
+() => {
+    const re = /(check|att|in_out|inout|ZPAtt|punch|clock|shift)/i;
+    const out = [];
+    const seen = new Set();
+    document.querySelectorAll('[id], button, a, [role="button"]').forEach(el => {
+        const id = el.id || '';
+        const cls = (typeof el.className === 'string' ? el.className : '') || '';
+        const txt = ((el.innerText || el.textContent || '').trim()).slice(0, 60);
+        if (!re.test(id) && !re.test(cls) && !re.test(txt)) return;
+        const key = `${el.tagName}|${id}|${cls}|${txt}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push({tag: el.tagName, id, cls: cls.slice(0, 80), txt});
+    });
+    return out.slice(0, 50);
+}
+"""
+
+
 def _save_debug(page, label: str) -> None:
+    """Dump screenshot + HTML + page hints. Free Render tier has no shell,
+    so we also stream the URL/title/element scan to stdout for log retrieval."""
     try:
         DEBUG_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(IST).strftime("%Y%m%d-%H%M%S")
-        path = DEBUG_DIR / f"{ts}-{label}.png"
-        page.screenshot(path=str(path), full_page=True)
-        log.error("Debug screenshot saved: %s", path)
+        png = DEBUG_DIR / f"{ts}-{label}.png"
+        html = DEBUG_DIR / f"{ts}-{label}.html"
+        try:
+            page.screenshot(path=str(png), full_page=True)
+            log.error("Debug screenshot saved: %s", png)
+        except Exception as exc:
+            log.warning("Screenshot failed: %s", exc)
+        try:
+            html.write_text(page.content(), encoding="utf-8")
+        except Exception as exc:
+            log.warning("HTML dump failed: %s", exc)
+        try:
+            log.error("DEBUG page.url    = %s", page.url)
+            log.error("DEBUG page.title  = %s", page.title())
+            hints = page.evaluate(_HINT_JS)
+            log.error("DEBUG hint count  = %d", len(hints))
+            for i, h in enumerate(hints):
+                log.error("DEBUG hint[%02d]    tag=%s id=%r cls=%r txt=%r",
+                          i, h.get("tag"), h.get("id"), h.get("cls"), h.get("txt"))
+        except Exception as exc:
+            log.warning("DEBUG page-scan failed: %s", exc)
     except Exception as exc:
-        log.warning("Could not save debug screenshot: %s", exc)
+        log.warning("Could not save debug info: %s", exc)
 
 
 def _do_attendance(cfg: dict, action: Action) -> str:
