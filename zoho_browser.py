@@ -58,13 +58,13 @@ def _load_config() -> dict:
 
 _HINT_JS = """
 () => {
-    const re = /(check|att|in_out|inout|ZPAtt|punch|clock|shift)/i;
+    const re = /(check|att|in_out|inout|ZPAtt|punch|clock|shift|continue|got\\s*it|proceed|skip|dismiss|remind|later|announce|session)/i;
     const out = [];
     const seen = new Set();
-    document.querySelectorAll('[id], button, a, [role="button"]').forEach(el => {
+    document.querySelectorAll('[id], button, a, [role="button"], [type="submit"]').forEach(el => {
         const id = el.id || '';
         const cls = (typeof el.className === 'string' ? el.className : '') || '';
-        const txt = ((el.innerText || el.textContent || '').trim()).slice(0, 60);
+        const txt = ((el.innerText || el.textContent || '').trim()).slice(0, 80);
         if (!re.test(id) && !re.test(cls) && !re.test(txt)) return;
         const key = `${el.tagName}|${id}|${cls}|${txt}`;
         if (seen.has(key)) return;
@@ -74,6 +74,71 @@ _HINT_JS = """
     return out.slice(0, 50);
 }
 """
+
+
+# Common dismiss-button texts on Zoho announcement / interstitial pages.
+_DISMISS_SELECTORS = [
+    "button:has-text('Remind me later')",
+    "button:has-text('Remind Me Later')",
+    "button:has-text('Maybe later')",
+    "button:has-text('Maybe Later')",
+    "button:has-text('Got it')",
+    "button:has-text('Got It')",
+    "button:has-text('Continue')",
+    "button:has-text('Proceed')",
+    "button:has-text('Skip')",
+    "button:has-text('Dismiss')",
+    "button:has-text('Close')",
+    "button:has-text('OK')",
+    "a:has-text('Continue')",
+    "a:has-text('Skip')",
+    "a:has-text('Got it')",
+    "[role='button']:has-text('Continue')",
+    "[role='button']:has-text('Got it')",
+    "[role='button']:has-text('Skip')",
+]
+
+
+def _dismiss_announcements_and_open_dashboard(page) -> None:
+    """Click any dismiss button if we're stuck on an interstitial, then force
+    navigation to the People dashboard. Idempotent; safe to call multiple times."""
+    for attempt in range(3):
+        url = page.url
+        if "people.zoho." in url and "/people" in url:
+            break  # already on the dashboard
+
+        if "accounts.zoho." in url:
+            log.info("Interstitial detected (attempt %d): %s", attempt + 1, url)
+            clicked = False
+            for sel in _DISMISS_SELECTORS:
+                try:
+                    btn = page.locator(sel).first
+                    if btn.is_visible(timeout=400):
+                        log.info("Dismissing with selector: %s", sel)
+                        btn.click()
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=10_000)
+                        except PWTimeout:
+                            pass
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if clicked:
+                continue  # re-check URL on next loop iteration
+
+        # No dismiss button matched (or unknown page) — navigate straight to People.
+        log.info("Force-navigating to https://people.zoho.in/people/")
+        try:
+            page.goto(
+                "https://people.zoho.in/people/",
+                wait_until="networkidle",
+                timeout=30_000,
+            )
+        except PWTimeout:
+            log.warning("Direct navigation timed out; URL is now %s", page.url)
+        break  # don't loop forever even if goto didn't get us to dashboard
+    log.info("Post-interstitial URL: %s", page.url)
 
 
 def _save_debug(page, label: str) -> None:
@@ -189,13 +254,12 @@ def _do_attendance(cfg: dict, action: Action) -> str:
             except PWTimeout:
                 log.info("No MFA prompt")
 
-            try:
-                remind = "text='Remind me later', text='Remind Me Later'"
-                page.wait_for_selector(remind, timeout=8_000)
-                page.click(remind)
-                log.info("Dismissed interstitial")
-            except PWTimeout:
-                pass
+            # Dismiss any post-login announcement interstitials (timezone reminder,
+            # sessions-reminder, OneAuth promo, etc.) and force-navigate to the
+            # People dashboard. Zoho's redirect target is set by `serviceurl`, but
+            # since May 11 they sometimes park us on accounts.zoho.in/announcement/*
+            # indefinitely. Direct goto bypasses that.
+            _dismiss_announcements_and_open_dashboard(page)
 
             page.wait_for_selector('//*[@id="ZPAtt_check_in_out"]', timeout=30_000)
             button = page.locator('//*[@id="ZPAtt_check_in_out"]')
