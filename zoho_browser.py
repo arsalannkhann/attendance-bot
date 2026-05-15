@@ -76,8 +76,20 @@ _HINT_JS = """
 """
 
 
-# Common dismiss-button texts on Zoho announcement / interstitial pages.
+# Common dismiss-button selectors on Zoho announcement / interstitial pages.
+# Order matters: we try ID-anchored selectors first since they're stable
+# across UI text changes, then fall back to text-matched selectors.
 _DISMISS_SELECTORS = [
+    # accounts.zoho.in/preannouncement/block-sessions — Zoho's "you have too
+    # many active sessions" page. The visible text on `#continue_button` is
+    # literally "Terminate All Sessions" because clicking it ends all your
+    # other Zoho sessions on this account (phone, laptop, etc.) and then
+    # proceeds. There is NO other dismiss option. We click it because the
+    # alternative is the bot being permanently blocked.
+    "#continue_button",
+    "a.continue_button",
+    "a.blue_btn.continue_button",
+    # Standard acknowledgement buttons on various Zoho announcement pages.
     "button:has-text('Remind me later')",
     "button:has-text('Remind Me Later')",
     "button:has-text('Maybe later')",
