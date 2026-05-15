@@ -99,45 +99,141 @@ _DISMISS_SELECTORS = [
 ]
 
 
+_INTERSTITIAL_HINT_JS = """
+() => {
+    const out = [];
+    document.querySelectorAll(
+        'button, a, [role="button"], input[type="submit"], input[type="button"]'
+    ).forEach(el => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        const txt = ((el.innerText || el.value || el.textContent || '').trim()).slice(0, 80);
+        if (!txt && !el.id) return;
+        out.push({
+            tag: el.tagName,
+            id: el.id || '',
+            cls: ((typeof el.className === 'string') ? el.className : '').slice(0, 80),
+            txt,
+            href: (el.href || '').slice(0, 100),
+        });
+    });
+    return out.slice(0, 40);
+}
+"""
+
+# JS-based dismiss: finds the first visible button/link whose text matches an
+# acknowledgement keyword and is NOT a destructive action. Returns the matched
+# text so we can log it. More resilient than CSS :has-text selectors because
+# Zoho uses generic <div role=button> elements without semantic markup.
+_JS_DISMISS_CLICK = """
+() => {
+    const good = /^(proceed|continue|got\\s*it|acknowledge|skip|dismiss|close|ok|i\\s*understand|maybe\\s*later|remind\\s*me\\s*later|next|done|agree|accept)$/i;
+    const bad  = /cancel|logout|sign\\s*out|delete|remove|deactivate|revoke|terminate/i;
+    const candidates = document.querySelectorAll(
+        'button, a, [role="button"], input[type="submit"], input[type="button"]'
+    );
+    for (const el of candidates) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+        const txt = ((el.innerText || el.value || el.textContent || '').trim());
+        if (!txt || bad.test(txt)) continue;
+        if (good.test(txt)) {
+            el.click();
+            return {clicked: true, txt: txt.slice(0, 80), tag: el.tagName, id: el.id || ''};
+        }
+    }
+    return {clicked: false};
+}
+"""
+
+
+def _dump_interstitial_hints(page) -> None:
+    """Log every visible clickable element so we can identify the dismiss
+    button when Zoho changes the interstitial markup."""
+    try:
+        hints = page.evaluate(_INTERSTITIAL_HINT_JS)
+        log.info("Interstitial clickable elements (%d):", len(hints))
+        for i, h in enumerate(hints):
+            log.info(
+                "  [%02d] %s id=%r cls=%r txt=%r",
+                i, h.get("tag"), h.get("id"), h.get("cls"), h.get("txt"),
+            )
+    except Exception as exc:
+        log.warning("Interstitial hint scan failed: %s", exc)
+
+
 def _dismiss_announcements_and_open_dashboard(page) -> None:
-    """Click any dismiss button if we're stuck on an interstitial, then force
-    navigation to the People dashboard. Idempotent; safe to call multiple times."""
+    """Click through any Zoho announcement / preannouncement interstitial so
+    the session redirect can complete to the People dashboard.
+
+    Strategy:
+      1. Dump every visible clickable element on the interstitial (for
+         diagnostics if the click flow fails — Zoho changes button text often).
+      2. Try our hard-coded `_DISMISS_SELECTORS` (Playwright `:has-text(...)`).
+      3. Fall back to in-page JS that scans for buttons whose text matches an
+         acknowledgement keyword (handles `<div role=button>` and other markup
+         that Playwright's CSS selector engine misses).
+      4. NEVER navigate away from accounts.zoho.in unauthenticated — doing
+         so loses the session ticket and Zoho redirects to the public
+         marketing site `www.zoho.com/people/`, which has no dashboard.
+    """
     for attempt in range(3):
         url = page.url
-        if "people.zoho." in url and "/people" in url:
-            break  # already on the dashboard
+        if "people.zoho." in url and "/people" not in url.split("people.zoho.in")[-1][:1]:
+            # On a *.people.zoho.* tenant URL — we're through.
+            pass
+        if "people.zoho." in url:
+            break
 
-        if "accounts.zoho." in url:
-            log.info("Interstitial detected (attempt %d): %s", attempt + 1, url)
-            clicked = False
-            for sel in _DISMISS_SELECTORS:
-                try:
-                    btn = page.locator(sel).first
-                    if btn.is_visible(timeout=400):
-                        log.info("Dismissing with selector: %s", sel)
-                        btn.click()
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=10_000)
-                        except PWTimeout:
-                            pass
-                        clicked = True
-                        break
-                except Exception:
-                    continue
-            if clicked:
-                continue  # re-check URL on next loop iteration
+        if "accounts.zoho." not in url:
+            log.warning("Unexpected URL during interstitial handling: %s", url)
+            break
 
-        # No dismiss button matched (or unknown page) — navigate straight to People.
-        log.info("Force-navigating to https://people.zoho.in/people/")
-        try:
-            page.goto(
-                "https://people.zoho.in/people/",
-                wait_until="networkidle",
-                timeout=30_000,
+        log.info("Interstitial detected (attempt %d): %s", attempt + 1, url)
+        _dump_interstitial_hints(page)
+
+        clicked = False
+        # Pass 1: Playwright :has-text selectors (works for <button> and <a>).
+        for sel in _DISMISS_SELECTORS:
+            try:
+                btn = page.locator(sel).first
+                if btn.is_visible(timeout=300):
+                    log.info("Dismissing via Playwright selector: %s", sel)
+                    btn.click()
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10_000)
+                    except PWTimeout:
+                        pass
+                    clicked = True
+                    break
+            except Exception:
+                continue
+
+        # Pass 2: in-page JS click. Handles generic divs / spans with role=button.
+        if not clicked:
+            try:
+                result = page.evaluate(_JS_DISMISS_CLICK)
+                if result and result.get("clicked"):
+                    log.info(
+                        "Dismissed via JS click: tag=%s id=%r txt=%r",
+                        result.get("tag"), result.get("id"), result.get("txt"),
+                    )
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10_000)
+                    except PWTimeout:
+                        pass
+                    clicked = True
+            except Exception as exc:
+                log.warning("JS dismiss click failed: %s", exc)
+
+        if not clicked:
+            log.error(
+                "No dismiss button found on interstitial. The hint dump above "
+                "shows every visible clickable element — extend _DISMISS_SELECTORS "
+                "or the JS regex in zoho_browser.py to match one of them."
             )
-        except PWTimeout:
-            log.warning("Direct navigation timed out; URL is now %s", page.url)
-        break  # don't loop forever even if goto didn't get us to dashboard
+            break  # Don't loop or navigate away; that loses the session.
+
     log.info("Post-interstitial URL: %s", page.url)
 
 
