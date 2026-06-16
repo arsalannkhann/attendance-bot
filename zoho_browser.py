@@ -369,12 +369,22 @@ def _do_attendance(cfg: dict, action: Action) -> str:
             # indefinitely. Direct goto bypasses that.
             _dismiss_announcements_and_open_dashboard(page)
 
-            # Zoho briefly tags the button with `zpl_btnloading` while the
-            # attendance widget hydrates. Clicking during that state is a
-            # silent no-op, so wait for the loading class to clear before
-            # treating the button as ready.
-            page.wait_for_selector(
-                "#ZPAtt_check_in_out:not(.zpl_btnloading)", timeout=30_000
+            # The attendance widget is rendered by Zoho's SPA after the
+            # dashboard shell loads; on a cold free dyno this can take a while.
+            # NOTE: `zpl_btnloading` / `zbutton--loading` are *permanent*
+            # classes on this button (the real spinner is #zpl_loading_icon,
+            # which is display:none) — do NOT gate on them. The reliable
+            # readiness signal is the button being visible with its label
+            # text ("Check-in" / "Check-out") populated.
+            page.wait_for_selector("#ZPAtt_check_in_out", state="visible", timeout=45_000)
+            page.wait_for_function(
+                """() => {
+                    const b = document.querySelector('#ZPAtt_check_in_out');
+                    return b && /check-?in|check-?out/i.test(
+                        (b.innerText || b.getAttribute('aria-label') || '')
+                    );
+                }""",
+                timeout=45_000,
             )
             button = page.locator("#ZPAtt_check_in_out")
             text = button.inner_text().strip().lower()
