@@ -369,8 +369,14 @@ def _do_attendance(cfg: dict, action: Action) -> str:
             # indefinitely. Direct goto bypasses that.
             _dismiss_announcements_and_open_dashboard(page)
 
-            page.wait_for_selector('//*[@id="ZPAtt_check_in_out"]', timeout=30_000)
-            button = page.locator('//*[@id="ZPAtt_check_in_out"]')
+            # Zoho briefly tags the button with `zpl_btnloading` while the
+            # attendance widget hydrates. Clicking during that state is a
+            # silent no-op, so wait for the loading class to clear before
+            # treating the button as ready.
+            page.wait_for_selector(
+                "#ZPAtt_check_in_out:not(.zpl_btnloading)", timeout=30_000
+            )
+            button = page.locator("#ZPAtt_check_in_out")
             text = button.inner_text().strip().lower()
             log.info("Widget text: %s", text.replace("\n", " "))
 
