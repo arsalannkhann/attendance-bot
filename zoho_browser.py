@@ -22,6 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 import pyotp
 import pytz
@@ -191,13 +192,17 @@ def _dismiss_announcements_and_open_dashboard(page) -> None:
     """
     for attempt in range(3):
         url = page.url
-        if "people.zoho." in url and "/people" not in url.split("people.zoho.in")[-1][:1]:
-            # On a *.people.zoho.* tenant URL — we're through.
-            pass
-        if "people.zoho." in url:
+        host = (urlparse(url).hostname or "").lower()
+
+        # We've arrived once the *host* is people.zoho.* — match on hostname,
+        # NOT a substring of the whole URL. The accounts.zoho.in interstitials
+        # carry "people.zoho.in" inside their `serviceurl=...` query param
+        # (the host isn't percent-encoded), so a naive `"people.zoho." in url`
+        # check falsely fired on the interstitial and skipped the dismiss step.
+        if host.startswith("people.zoho."):
             break
 
-        if "accounts.zoho." not in url:
+        if not host.startswith("accounts.zoho."):
             log.warning("Unexpected URL during interstitial handling: %s", url)
             break
 
