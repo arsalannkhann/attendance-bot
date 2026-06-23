@@ -90,6 +90,14 @@ _DISMISS_SELECTORS = [
     "#continue_button",
     "a.continue_button",
     "a.blue_btn.continue_button",
+    # accounts.zoho.in/announcement/tfa-banner — "set up two-factor auth" nag
+    # shown to accounts without MFA configured. The proceed control is a
+    # <button> labelled "Continue to Sign In" (classes cont-signin /
+    # no-backup-cancel). It renders a beat after the banner, so the dismiss
+    # loop now settles + retries before giving up.
+    "button.cont-signin",
+    "button.no-backup-cancel",
+    "button:has-text('Continue to Sign In')",
     # Standard acknowledgement buttons on various Zoho announcement pages.
     "button:has-text('Remind me later')",
     "button:has-text('Remind Me Later')",
@@ -159,6 +167,36 @@ _JS_DISMISS_CLICK = """
 }
 """
 
+# Targeted proceed-click for the tfa-banner (and similar) interstitials, where
+# the "Continue to Sign In" control is present in the DOM but hidden behind a
+# collapsed sub-dialog — so the visibility-filtered scans above never match it.
+# A direct JS .click() fires the element's handler regardless of visibility.
+# Scoped to specific proceed classes / exact text so we never click a
+# destructive control (Sign Out, etc.).
+_JS_FORCE_PROCEED_CLICK = """
+() => {
+    const byClass = document.querySelector(
+        'button.cont-signin, button.no-backup-cancel, a.continue_button'
+    );
+    let el = byClass;
+    if (!el) {
+        el = [...document.querySelectorAll('button, a, [role="button"]')].find(b => {
+            const t = ((b.innerText || b.textContent || '').trim());
+            return /^continue\\s*to\\s*sign\\s*in$/i.test(t);
+        });
+    }
+    if (el) {
+        el.click();
+        return {
+            clicked: true,
+            txt: ((el.innerText || el.textContent || '').trim()).slice(0, 80),
+            cls: (typeof el.className === 'string' ? el.className : '').slice(0, 80),
+        };
+    }
+    return {clicked: false};
+}
+"""
+
 
 def _dump_interstitial_hints(page) -> None:
     """Log every visible clickable element so we can identify the dismiss
@@ -190,7 +228,7 @@ def _dismiss_announcements_and_open_dashboard(page) -> None:
          so loses the session ticket and Zoho redirects to the public
          marketing site `www.zoho.com/people/`, which has no dashboard.
     """
-    for attempt in range(3):
+    for attempt in range(6):
         url = page.url
         host = (urlparse(url).hostname or "").lower()
 
@@ -207,6 +245,10 @@ def _dismiss_announcements_and_open_dashboard(page) -> None:
             break
 
         log.info("Interstitial detected (attempt %d): %s", attempt + 1, url)
+        # Some banners (e.g. tfa-banner) paint their primary button a beat
+        # after the page first appears. Let the DOM settle before scanning so
+        # the dismiss control actually exists when we look for it.
+        page.wait_for_timeout(1500)
         _dump_interstitial_hints(page)
 
         clicked = False
@@ -243,14 +285,44 @@ def _dismiss_announcements_and_open_dashboard(page) -> None:
             except Exception as exc:
                 log.warning("JS dismiss click failed: %s", exc)
 
+        # Pass 3: targeted force-click for proceed controls that live in the DOM
+        # but are hidden (tfa-banner's "Continue to Sign In"). Visibility-
+        # filtered passes above miss these; a scoped JS click fires the handler.
         if not clicked:
-            log.error(
-                "No dismiss button found on interstitial. The hint dump above "
-                "shows every visible clickable element — extend _DISMISS_SELECTORS "
-                "or the JS regex in zoho_browser.py to match one of them."
-            )
-            break  # Don't loop or navigate away; that loses the session.
+            try:
+                result = page.evaluate(_JS_FORCE_PROCEED_CLICK)
+                if result and result.get("clicked"):
+                    log.info(
+                        "Dismissed via forced proceed-click: txt=%r cls=%r",
+                        result.get("txt"), result.get("cls"),
+                    )
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10_000)
+                    except PWTimeout:
+                        pass
+                    clicked = True
+            except Exception as exc:
+                log.warning("Forced proceed-click failed: %s", exc)
 
+        if not clicked:
+            # Don't give up after one miss: a late-rendering button may appear
+            # within the next iteration. We never navigate away (that loses the
+            # session) — just wait and let the bounded loop re-scan.
+            log.warning(
+                "No dismiss button matched on interstitial (attempt %d); "
+                "waiting and retrying.", attempt + 1,
+            )
+            page.wait_for_timeout(2000)
+            continue
+
+    final_host = (urlparse(page.url).hostname or "").lower()
+    if final_host.startswith("accounts.zoho."):
+        log.error(
+            "Still stuck on interstitial after retries: %s — the hint dumps "
+            "above show every visible clickable element; extend "
+            "_DISMISS_SELECTORS or the JS regex in zoho_browser.py to match one.",
+            page.url,
+        )
     log.info("Post-interstitial URL: %s", page.url)
 
 
