@@ -74,8 +74,10 @@ jobs:
           DEBUG_DIR: ${{ runner.temp }}/attendance-debug
         run: python zoho_browser.py
 
+      # always(): a run can succeed on a retry after earlier attempts saved
+      # screenshots, and those are exactly the ones worth keeping.
       - name: Upload debug screenshots
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: attendance-debug-${{ github.run_id }}

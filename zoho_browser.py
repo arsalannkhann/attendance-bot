@@ -106,10 +106,15 @@ _DISMISS_SELECTORS = [
     # "Update" / "Edit & Update" would rewrite the account's time zone, so
     # snooze instead. The snooze is a <span>, which the button/link scans miss.
     "span.remind_later_link",
+    # accounts.zoho.in/announcement/sessions-reminder, newer variant: the blue
+    # button is "Manage Sessions" (#continueButton, which only opens session
+    # management) and the way on is the "Do it later" link.
+    "a.dolater",
     # Standard acknowledgement buttons on various Zoho announcement pages.
     "button:has-text('Remind me later')",
     "button:has-text('Remind Me Later')",
     "text=/^\\s*remind me later\\s*$/i",
+    "text=/^\\s*do it later\\s*$/i",
     "button:has-text('Maybe later')",
     "button:has-text('Maybe Later')",
     "button:has-text('Got it')",
@@ -335,6 +340,25 @@ def _dismiss_announcements_and_open_dashboard(page) -> None:
     log.info("Post-interstitial URL: %s", page.url)
 
 
+# Zoho's own "Sign Out" link, as served on its interstitial pages.
+_SIGN_OUT_URL = (
+    "https://accounts.zoho.in/logout?servicename=AaaServer"
+    "&serviceurl=https%3A%2F%2Fpeople.zoho.in%2Fpeople"
+)
+
+
+def _sign_out(page) -> None:
+    """End this run's Zoho session. Each run signs in from a fresh browser, and
+    sessions left open pile up until Zoho shows sessions-reminder and then
+    block-sessions, whose only way on is "Terminate All Sessions" (which also
+    signs the user out on every other device)."""
+    try:
+        page.goto(_SIGN_OUT_URL, wait_until="domcontentloaded", timeout=15_000)
+        log.info("Signed out of Zoho")
+    except Exception as exc:
+        log.warning("Zoho sign-out failed, session left open: %s", exc)
+
+
 def _save_debug(page, label: str) -> None:
     """Dump screenshot + HTML + page hints. Free Render tier has no shell,
     so we also stream the URL/title/element scan to stdout for log retrieval."""
@@ -501,6 +525,7 @@ def _do_attendance(cfg: dict, action: Action, *, dry_run: bool = False) -> str:
             _save_debug(page, action)
             raise
         finally:
+            _sign_out(page)
             try:
                 browser.close()
             except Exception:

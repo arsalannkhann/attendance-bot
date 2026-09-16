@@ -70,8 +70,9 @@ def test_script_gets_the_inputs_as_env():
     assert env["DRY_RUN"] == "${{ inputs.dry_run }}"
 
 
-def test_failure_screenshots_are_uploaded_from_the_debug_dir():
+def test_debug_screenshots_are_uploaded_even_when_a_retry_succeeds():
     upload = next(s for s in STEPS if s.get("uses", "").startswith("actions/upload-artifact"))
 
-    assert upload["if"] == "failure()"
+    assert upload["if"] == "always()"
     assert upload["with"]["path"] == _script_step()["env"]["DEBUG_DIR"]
+    assert upload["with"]["if-no-files-found"] == "ignore"
