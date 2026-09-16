@@ -1,21 +1,43 @@
 name: Zoho People Attendance (Browser)
 
+# Started by the Render service (app.py) at the exact IST time. The browser runs
+# here because Render's free 512 MB instance runs out of memory on the Zoho
+# People app. No `schedule:` trigger: GitHub cron drifts, Render keeps time.
+# app.py's startup catch-up reads `run-name` to tell checkin from checkout.
+run-name: "attendance: ${{ inputs.action }} (${{ inputs.source }})"
+
 on:
-  schedule:
-    - cron: '30 4 * * 1-5'
-    - cron: '30 14 * * 1-5'
   workflow_dispatch:
     inputs:
       action:
+        description: Which punch to make
         required: true
-        default: 'checkin'
+        default: checkin
         type: choice
         options: [checkin, checkout]
+      force:
+        description: Skip the weekend gate (smoke tests)
+        type: boolean
+        default: false
+      dry_run:
+        description: Log in and read the widget, but don't click
+        type: boolean
+        default: false
+      source:
+        description: What started the run (scheduler, catchup, api, manual)
+        type: string
+        default: manual
+
+# One attendance run at a time. A duplicate dispatch waits its turn, then finds
+# the widget already flipped and no-ops instead of punching twice.
+concurrency:
+  group: zoho-attendance
+  cancel-in-progress: false
 
 jobs:
   attendance:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +50,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -36,37 +58,26 @@ jobs:
       - name: Install Playwright
         run: playwright install chromium --with-deps
 
-      - name: Set ACTION
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "ACTION=${{ github.event.inputs.action }}" >> $GITHUB_ENV
-          else
-            HOUR=$(date -u +'%H')
-            if [ "$HOUR" -ge 4 ] && [ "$HOUR" -lt 12 ]; then
-              echo "ACTION=checkin" >> $GITHUB_ENV
-            elif [ "$HOUR" -ge 14 ] && [ "$HOUR" -le 23 ]; then
-              echo "ACTION=checkout" >> $GITHUB_ENV
-            fi
-          fi
-
-      - name: Run automation (with retry)
+      # zoho_browser.py retries 3x itself and exits non-zero only when every
+      # attempt failed, so the run's conclusion is the real outcome.
+      - name: Run attendance
         env:
           ZOHO_EMAIL: ${{ secrets.ZOHO_EMAIL }}
           ZOHO_PASSWORD: ${{ secrets.ZOHO_PASSWORD }}
           ZOHO_TOTP: ${{ secrets.ZOHO_TOTP }}
           OUTLOOK_EMAIL: ${{ secrets.OUTLOOK_EMAIL }}
           OUTLOOK_PASSWORD: ${{ secrets.OUTLOOK_PASSWORD }}
-          ACTION: ${{ env.ACTION }}
-        run: |
-          for i in 1 2 3; do
-            python zoho_browser.py && break
-            echo "Retry $i..."
-            sleep 10
-          done
+          ACTION: ${{ inputs.action }}
+          FORCE: ${{ inputs.force }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DEBUG_DIR: ${{ runner.temp }}/attendance-debug
+        run: python zoho_browser.py
 
-      - name: Upload debug screenshot
+      - name: Upload debug screenshots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshot
-          path: debug_screenshot.png
+          name: attendance-debug-${{ github.run_id }}
+          path: ${{ runner.temp }}/attendance-debug
+          if-no-files-found: ignore
+          retention-days: 7

@@ -10,6 +10,9 @@ Env vars:
   ZOHO_TOTP                       (preferred MFA source)
   OUTLOOK_EMAIL, OUTLOOK_PASSWORD (fallback MFA source via inbox poll)
   ACTION                          (CLI only: checkin | checkout)
+  FORCE                           (CLI only: "true" skips the weekend gate)
+  DRY_RUN                         (CLI only: "true" logs in and reads the
+                                   widget but never clicks)
 """
 
 from __future__ import annotations
@@ -357,8 +360,22 @@ def _save_debug(page, label: str) -> None:
         log.warning("Could not save debug info: %s", exc)
 
 
-def _do_attendance(cfg: dict, action: Action) -> str:
-    """Single attempt. Returns a human-readable result string. Raises on failure."""
+def _decide(action: Action, label: str, *, dry_run: bool) -> tuple[bool, str]:
+    """(click?, result) for the punch button's current label. A label already
+    showing the opposite action means the punch happened, so re-runs no-op."""
+    if action == "checkin" and ("check-out" in label or "checkout" in label):
+        return False, "already-checked-in"
+    if action == "checkout" and ("check-in" in label or "checkin" in label):
+        return False, "already-checked-out"
+    result = "checked-in" if action == "checkin" else "checked-out"
+    if dry_run:
+        return False, f"dry-run: would click {label!r} ({result})"
+    return True, result
+
+
+def _do_attendance(cfg: dict, action: Action, *, dry_run: bool = False) -> str:
+    """Single attempt. Returns a human-readable result string. Raises on failure.
+    With `dry_run`, logs in and reads the widget but never clicks."""
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -467,20 +484,12 @@ def _do_attendance(cfg: dict, action: Action) -> str:
             text = button.inner_text().strip().lower()
             log.info("Widget text: %s", text.replace("\n", " "))
 
-            if action == "checkin":
-                if "check-out" in text or "checkout" in text:
-                    return "already-checked-in"
+            should_click, result = _decide(action, text, dry_run=dry_run)
+            if should_click:
                 time.sleep(3)
                 button.click(delay=200)
                 time.sleep(5)
-                return "checked-in"
-            else:
-                if "check-in" in text or "checkin" in text:
-                    return "already-checked-out"
-                time.sleep(3)
-                button.click(delay=200)
-                time.sleep(5)
-                return "checked-out"
+            return result
 
         except Exception as exc:
             _save_debug(page, action)
@@ -498,6 +507,7 @@ def run_attendance(
     retries: int = 3,
     jitter_seconds: int = 60,
     skip_weekend_check: bool = False,
+    dry_run: bool = False,
 ) -> str:
     """Public entry point used by the scheduler.
 
@@ -524,7 +534,7 @@ def run_attendance(
     for attempt in range(1, retries + 1):
         try:
             log.info("Attendance attempt %d/%d for %s", attempt, retries, action)
-            result = _do_attendance(cfg, action)
+            result = _do_attendance(cfg, action, dry_run=dry_run)
             log.info("Result: %s", result)
             return result
         except Exception as exc:
@@ -538,6 +548,10 @@ def run_attendance(
     raise RuntimeError(f"All {retries} attempts failed: {last_error}") from last_error
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
 def _cli() -> None:
     action = os.environ.get("ACTION", "").lower()
     if action not in ("checkin", "checkout"):
@@ -545,7 +559,12 @@ def _cli() -> None:
         action = "checkin" if 6 <= hour < 17 else "checkout"
         log.info("Auto-detected action from IST hour %d: %s", hour, action)
     try:
-        run_attendance(action, jitter_seconds=0)
+        run_attendance(
+            action,
+            jitter_seconds=0,
+            skip_weekend_check=_env_flag("FORCE"),
+            dry_run=_env_flag("DRY_RUN"),
+        )
     except Exception as exc:
         log.error("Run failed: %s", exc)
         sys.exit(1)

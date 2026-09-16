@@ -31,6 +31,12 @@ services:
         sync: false
       - key: OUTLOOK_PASSWORD
         sync: false
+      # Runs the browser on GitHub Actions instead of this 512 MB instance
+      # (README Step 4). Fine-grained token, Actions: read & write. Leave unset
+      # to run Chromium in-process. The repo and branch come from Render's
+      # RENDER_GIT_* vars.
+      - key: GH_DISPATCH_TOKEN
+        sync: false
       # SELF_PING_URL is auto-derived from RENDER_EXTERNAL_URL — leave unset
       # unless you want to ping a custom URL.
       # Optional: protects POST /run from random callers.
