@@ -37,12 +37,13 @@ def make_run(
     status: str = "completed",
     conclusion: str | None = "success",
     created_at: str = "2026-09-16T06:30:05Z",
+    dry_run: bool = False,
 ) -> dict:
     """A workflow run carrying the `workflow-run` fields the bot reads."""
     return {
         "id": run_id,
         "name": "Zoho People Attendance (Browser)",
-        "display_title": f"attendance: {action} ({source})",
+        "display_title": f"attendance: {action} ({source})" + (" dry-run" if dry_run else ""),
         "event": "workflow_dispatch",
         "status": status,
         "conclusion": conclusion if status == "completed" else None,

@@ -3,8 +3,9 @@ name: Zoho People Attendance (Browser)
 # Started by the Render service (app.py) at the exact IST time. The browser runs
 # here because Render's free 512 MB instance runs out of memory on the Zoho
 # People app. No `schedule:` trigger: GitHub cron drifts, Render keeps time.
-# app.py's startup catch-up reads `run-name` to tell checkin from checkout.
-run-name: "attendance: ${{ inputs.action }} (${{ inputs.source }})"
+# app.py's startup catch-up reads `run-name` to tell checkin from checkout, and
+# skips dry runs because they never punch.
+run-name: "attendance: ${{ inputs.action }} (${{ inputs.source }})${{ inputs.dry_run && ' dry-run' || '' }}"
 
 on:
   workflow_dispatch:

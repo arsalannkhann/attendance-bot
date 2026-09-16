@@ -156,6 +156,13 @@ def test_handled_run_ignores_runs_that_did_not_succeed(conclusion):
     assert gd.handled_run([make_run(1, "checkin", conclusion=conclusion)], "checkin") is None
 
 
+@pytest.mark.parametrize("status", ["completed", "in_progress"])
+def test_handled_run_ignores_dry_runs(status):
+    # A dry run reads the widget but never punches, so it doesn't count.
+    dry = make_run(1, "checkin", source="manual", status=status, dry_run=True)
+    assert gd.handled_run([dry], "checkin") is None
+
+
 # ── watching a run ───────────────────────────────────────────────────────────
 
 def test_wait_for_completion_polls_until_the_run_finishes(github, cfg):

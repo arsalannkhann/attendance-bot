@@ -33,6 +33,7 @@ API_VERSION = "2022-11-28"
 
 # Must match `run-name` in .github/workflows/attendance.yml.
 _RUN_NAME_RE = re.compile(r"^attendance: (checkin|checkout)\b")
+_DRY_RUN_SUFFIX = " dry-run"
 _UNFINISHED = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
 
 
@@ -161,9 +162,10 @@ def run_action(run: Mapping) -> str | None:
 
 
 def handled_run(runs: Iterable[Mapping], action: str) -> Mapping | None:
-    """First run for `action` that is still going or already succeeded."""
+    """First run for `action` that is still going or already succeeded.
+    Dry runs never punch, so they don't count."""
     for run in runs:
-        if run_action(run) != action:
+        if run_action(run) != action or (run.get("display_title") or "").endswith(_DRY_RUN_SUFFIX):
             continue
         if run.get("status") in _UNFINISHED or run.get("conclusion") == "success":
             return run

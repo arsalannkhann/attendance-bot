@@ -101,9 +101,15 @@ _DISMISS_SELECTORS = [
     "button.cont-signin",
     "button.no-backup-cancel",
     "button:has-text('Continue to Sign In')",
+    # accounts.zoho.in/announcement/timezone-update — "Update your time zone",
+    # shown when the sign-in IP is in another time zone (GitHub's US runners).
+    # "Update" / "Edit & Update" would rewrite the account's time zone, so
+    # snooze instead. The snooze is a <span>, which the button/link scans miss.
+    "span.remind_later_link",
     # Standard acknowledgement buttons on various Zoho announcement pages.
     "button:has-text('Remind me later')",
     "button:has-text('Remind Me Later')",
+    "text=/^\\s*remind me later\\s*$/i",
     "button:has-text('Maybe later')",
     "button:has-text('Maybe Later')",
     "button:has-text('Got it')",

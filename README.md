@@ -230,7 +230,8 @@ ACTION=checkin DRY_RUN=true python zoho_browser.py
 # full service (scheduler + endpoints) on http://localhost:8000:
 uvicorn app:app --reload --port 8000
 
-# tests (no browser, no network):
+# tests (no network; tests/test_interstitials.py drives headless Chromium
+# and skips itself if `playwright install chromium` hasn't been run):
 pip install -r requirements-dev.txt
 pytest
 ```

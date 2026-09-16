@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 import github_dispatch as gd
@@ -38,12 +39,23 @@ def test_inputs_are_typed_for_render_and_manual_runs():
     assert inputs["source"]["type"] == "string"
 
 
-def test_run_name_is_what_catch_up_reads():
-    title = (WORKFLOW["run-name"]
-             .replace("${{ inputs.action }}", "checkout")
-             .replace("${{ inputs.source }}", "catchup"))
+def _run_name(*, action: str, source: str, dry_run: bool) -> str:
+    return (WORKFLOW["run-name"]
+            .replace("${{ inputs.action }}", action)
+            .replace("${{ inputs.source }}", source)
+            .replace("${{ inputs.dry_run && ' dry-run' || '' }}", " dry-run" if dry_run else ""))
 
-    assert gd.run_action({"display_title": title}) == "checkout"
+
+@pytest.mark.parametrize("dry_run, counts_as_handled", [(False, True), (True, False)])
+def test_run_name_lets_catch_up_tell_real_runs_from_dry_runs(dry_run, counts_as_handled):
+    run = {
+        "display_title": _run_name(action="checkout", source="catchup", dry_run=dry_run),
+        "status": "completed",
+        "conclusion": "success",
+    }
+
+    assert gd.run_action(run) == "checkout"
+    assert (gd.handled_run([run], "checkout") is run) == counts_as_handled
 
 
 def test_attendance_runs_one_at_a_time():
