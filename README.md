@@ -267,6 +267,15 @@ The log line ends with GitHub's own message. Usual causes:
 - **403 / 404:** the token can't see the repo or lacks **Actions: Read and write**, or `GH_DISPATCH_REPO` / `GH_DISPATCH_WORKFLOW` is wrong.
 - **422:** the workflow is disabled, or the branch's `attendance.yml` doesn't declare the inputs Render sends. Enable it and make sure the branch is up to date.
 
+### `Zoho's attendance record: ...; but the dashboard button says ...`
+The bot reads the dashboard's attendance button **and** today's entry on the Attendance page, and only clicks when they agree. On 2026-09-16 the button said "Check-in" for hours while the user was checked in, so the 22:00 checkout silently did nothing. Now a disagreement fails the run without clicking. Punch manually in Zoho, and check the run's screenshots (`gh run download <run-id>`).
+
+### `Clicked checkin/checkout, but Zoho's attendance record still shows: ...`
+The click went through, but the Attendance page didn't show the punch after four checks about 10 s apart. Check Zoho People and punch manually if needed.
+
+### `Zoho is blocking sign-in until other sessions end`
+Too many active Zoho sessions. The bot won't click "Terminate All Sessions", which signs you out everywhere. End old sessions in Zoho Accounts → Sessions, then re-run. Every run signs out when it finishes, so this shouldn't recur.
+
 ### Login fails / widget not found
 Open the Render **Logs** tab and follow the GitHub run link from the failed job. The run log has the full attempt, and every failure uploads a full-page screenshot as a run artifact:
 

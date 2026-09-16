@@ -20,11 +20,13 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 from urllib.parse import urlparse
 
 import pyotp
@@ -84,12 +86,10 @@ _HINT_JS = """
 # Order matters: we try ID-anchored selectors first since they're stable
 # across UI text changes, then fall back to text-matched selectors.
 _DISMISS_SELECTORS = [
-    # accounts.zoho.in/preannouncement/block-sessions — Zoho's "you have too
-    # many active sessions" page. The visible text on `#continue_button` is
-    # literally "Terminate All Sessions" because clicking it ends all your
-    # other Zoho sessions on this account (phone, laptop, etc.) and then
-    # proceeds. There is NO other dismiss option. We click it because the
-    # alternative is the bot being permanently blocked.
+    # accounts.zoho.in/announcement/sessions-reminder (older variant): the
+    # "I Understand" link. On block-sessions the same id is "Terminate All
+    # Sessions"; _dismiss_announcements_and_open_dashboard stops on that page
+    # before any of these selectors are tried.
     "#continue_button",
     "a.continue_button",
     "a.blue_btn.continue_button",
@@ -258,6 +258,16 @@ def _dismiss_announcements_and_open_dashboard(page) -> None:
             log.warning("Unexpected URL during interstitial handling: %s", url)
             break
 
+        # block-sessions' only way on is "Terminate All Sessions", which signs
+        # the user out everywhere. On 2026-09-16 it also left the dashboard's
+        # attendance button wrong for the rest of the day. Stop instead.
+        if "/block-sessions" in urlparse(url).path:
+            raise RuntimeError(
+                "Zoho is blocking sign-in until other sessions end (too many active "
+                "sessions). Not clicking 'Terminate All Sessions', which signs you out "
+                "everywhere. End old sessions in Zoho Accounts > Sessions, then re-run."
+            )
+
         log.info("Interstitial detected (attempt %d): %s", attempt + 1, url)
         # Some banners (e.g. tfa-banner) paint their primary button a beat
         # after the page first appears. Let the DOM settle before scanning so
@@ -390,17 +400,173 @@ def _save_debug(page, label: str) -> None:
         log.warning("Could not save debug info: %s", exc)
 
 
-def _decide(action: Action, label: str, *, dry_run: bool) -> tuple[bool, str]:
-    """(click?, result) for the punch button's current label. A label already
-    showing the opposite action means the punch happened, so re-runs no-op."""
-    if action == "checkin" and ("check-out" in label or "checkout" in label):
-        return False, "already-checked-in"
-    if action == "checkout" and ("check-in" in label or "checkin" in label):
-        return False, "already-checked-out"
-    result = "checked-in" if action == "checkin" else "checked-out"
+class AttendanceError(RuntimeError):
+    """Zoho's attendance state couldn't be read or didn't change as expected."""
+
+
+class AttendanceMismatch(AttendanceError):
+    """The dashboard button and Zoho's attendance record disagree."""
+
+
+@dataclass(frozen=True)
+class AttendanceRecord:
+    """Today's row on Zoho People's Attendance page: the server's record, which
+    stayed right on 2026-09-16 while the dashboard button did not."""
+
+    check_in: str | None
+    check_out: str | None
+
+    @property
+    def checked_in(self) -> bool:
+        return self.check_in is not None and self.check_out is None
+
+    def __str__(self) -> str:
+        if self.check_in is None:
+            return "no check-in today"
+        if self.check_out is None:
+            return f"checked in at {self.check_in}, no check-out"
+        return f"checked in at {self.check_in}, checked out at {self.check_out}"
+
+
+_TIME = r"(\d{1,2}:\d{2}\s*[AP]M)"
+
+
+def _parse_record(labels: list[str]) -> AttendanceRecord:
+    """Read a row's aria-labels, e.g. "Remote In Check-in Time: 01:04 PM" and
+    "Check-out Time :  04:02 AM"."""
+    check_in = check_out = None
+    for label in labels:
+        if match := re.search(r"Check-in Time\s*:\s*" + _TIME, label, re.I):
+            check_in = match.group(1)
+        elif match := re.search(r"Check-out Time\s*:\s*" + _TIME, label, re.I):
+            check_out = match.group(1)
+    return AttendanceRecord(check_in=check_in, check_out=check_out)
+
+
+def _decide(action: Action, label: str, record: AttendanceRecord) -> tuple[bool, str]:
+    """(click?, result) when the dashboard button and today's attendance record
+    agree on whether the user is checked in; AttendanceMismatch when they don't,
+    rather than guess which one is wrong."""
+    button_says_checked_in = "check-out" in label or "checkout" in label
+    if button_says_checked_in != record.checked_in:
+        raise AttendanceMismatch(
+            f"Zoho's attendance record: {record}; but the dashboard button says {label!r}. "
+            "Not clicking a button that contradicts the record."
+        )
+    if action == "checkin":
+        return (False, "already-checked-in") if record.checked_in else (True, "checked-in")
+    return (True, "checked-out") if record.checked_in else (False, "already-checked-out")
+
+
+# Waits around the punch click, and how long to look for it in the record.
+_PRE_CLICK_MS = 3000
+_POST_CLICK_MS = 5000
+_CONFIRM_ATTEMPTS = 4
+_CONFIRM_WAIT_SECONDS = 10
+
+
+def _confirm_punch(read_record: Callable[[], AttendanceRecord], action: Action) -> AttendanceRecord:
+    """Re-read the attendance record until it shows the punch; raise if it never does."""
+    record = None
+    for attempt in range(1, _CONFIRM_ATTEMPTS + 1):
+        record = read_record()
+        landed = record.checked_in if action == "checkin" else record.check_out is not None
+        if landed:
+            log.info("Punch confirmed in Zoho's attendance record: %s", record)
+            return record
+        if attempt < _CONFIRM_ATTEMPTS:
+            time.sleep(_CONFIRM_WAIT_SECONDS)
+    raise AttendanceError(
+        f"Clicked {action}, but Zoho's attendance record still shows: {record}. "
+        "Check Zoho People and punch manually if needed."
+    )
+
+
+# The dashboard's punch button. The Attendance page also renders a <div> with
+# the same id, so always qualify it with the tag.
+_BUTTON = "button#ZPAtt_check_in_out"
+
+_TODAY_LABELS_JS = """
+() => {
+  const rows = [...document.querySelectorAll('#ZPAtt5_listViewEntries tr')];
+  const firstLabel = r => { const td = r.querySelector('td'); return td ? (td.getAttribute('aria-label') || '') : ''; };
+  const today = rows.find(r => r.classList.contains('zpl_crntday')) || rows.find(r => /^today\\b/i.test(firstLabel(r)));
+  return today ? [...today.querySelectorAll('[aria-label]')].map(el => el.getAttribute('aria-label')) : null;
+}
+"""
+
+
+def _read_button(page) -> str:
+    """The dashboard punch button's label, lowercased. Waits for its text, not its
+    aria-label, which stays "Check-in" whatever the state. The zpl_btnloading /
+    zbutton--loading classes are permanent, so they're not a readiness signal."""
+    page.wait_for_selector(_BUTTON, state="visible", timeout=45_000)
+    page.wait_for_function(
+        """(selector) => {
+            const b = document.querySelector(selector);
+            return b && /check-?in|check-?out/i.test(b.innerText || '');
+        }""",
+        arg=_BUTTON,
+        timeout=45_000,
+    )
+    label = page.locator(_BUTTON).inner_text().strip().lower()
+    log.info("Widget text: %s", label.replace("\n", " "))
+    return label
+
+
+def _read_record(page) -> AttendanceRecord:
+    """Open the Attendance page from the dashboard and read today's row."""
+    page.click("#zp_maintab_attendance", timeout=30_000)
+    page.wait_for_selector("#ZPAtt5_listViewEntries tr.zpl_crntday", timeout=45_000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=10_000)
+    except PWTimeout:
+        pass
+    labels = page.evaluate(_TODAY_LABELS_JS)
+    if labels is None:
+        raise AttendanceError("Couldn't find today's row on Zoho's Attendance page")
+    record = _parse_record(labels)
+    log.info("Attendance record: %s", record)
+    return record
+
+
+def _open_portal(page, portal: str) -> None:
+    """A fresh load of the People portal, so what's read next is Zoho's current
+    state rather than this page's memory of it."""
+    page.goto("about:blank")
+    page.goto(portal, wait_until="domcontentloaded", timeout=45_000)
+
+
+def _punch(page, action: Action, *, dry_run: bool = False) -> str:
+    """From the signed-in People portal: decide from the dashboard button and
+    today's attendance record together, click only when both agree a punch is
+    needed, then confirm the punch in the record. With `dry_run`, stops right
+    before the click."""
+    portal = page.url.split("#", 1)[0]
+    label = _read_button(page)
+    record = _read_record(page)
+    should_click, result = _decide(action, label, record)
+    if not should_click:
+        return result
+
+    # Check the button again on a fresh load, right before clicking it.
+    _open_portal(page, portal)
+    label = _read_button(page)
+    _decide(action, label, record)
     if dry_run:
-        return False, f"dry-run: would click {label!r} ({result})"
-    return True, result
+        return f"dry-run: would click {label!r} ({result})"
+
+    page.wait_for_timeout(_PRE_CLICK_MS)
+    page.locator(_BUTTON).click(delay=200)
+    page.wait_for_timeout(_POST_CLICK_MS)
+
+    def reread() -> AttendanceRecord:
+        _open_portal(page, portal)
+        _read_button(page)
+        return _read_record(page)
+
+    _confirm_punch(reread, action)
+    return result
 
 
 def _do_attendance(cfg: dict, action: Action, *, dry_run: bool = False) -> str:
@@ -492,34 +658,7 @@ def _do_attendance(cfg: dict, action: Action, *, dry_run: bool = False) -> str:
             # since May 11 they sometimes park us on accounts.zoho.in/announcement/*
             # indefinitely. Direct goto bypasses that.
             _dismiss_announcements_and_open_dashboard(page)
-
-            # The attendance widget is rendered by Zoho's SPA after the
-            # dashboard shell loads; on a cold free dyno this can take a while.
-            # NOTE: `zpl_btnloading` / `zbutton--loading` are *permanent*
-            # classes on this button (the real spinner is #zpl_loading_icon,
-            # which is display:none) — do NOT gate on them. The reliable
-            # readiness signal is the button being visible with its label
-            # text ("Check-in" / "Check-out") populated.
-            page.wait_for_selector("#ZPAtt_check_in_out", state="visible", timeout=45_000)
-            page.wait_for_function(
-                """() => {
-                    const b = document.querySelector('#ZPAtt_check_in_out');
-                    return b && /check-?in|check-?out/i.test(
-                        (b.innerText || b.getAttribute('aria-label') || '')
-                    );
-                }""",
-                timeout=45_000,
-            )
-            button = page.locator("#ZPAtt_check_in_out")
-            text = button.inner_text().strip().lower()
-            log.info("Widget text: %s", text.replace("\n", " "))
-
-            should_click, result = _decide(action, text, dry_run=dry_run)
-            if should_click:
-                time.sleep(3)
-                button.click(delay=200)
-                time.sleep(5)
-            return result
+            return _punch(page, action, dry_run=dry_run)
 
         except Exception as exc:
             _save_debug(page, action)

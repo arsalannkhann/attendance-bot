@@ -109,6 +109,35 @@ def test_sessions_reminder_is_put_off_not_managed(browser, markup):
     assert visited == [DASHBOARD]
 
 
+def test_block_sessions_page_stops_the_run_instead_of_ending_sessions(browser):
+    # accounts.zoho.in/preannouncement/block-sessions as served 2026-09-16: its
+    # only way on ends every session on the account, which on 2026-09-16 left
+    # the dashboard's attendance button wrong for the rest of the day.
+    page = browser.new_page()
+    visited: list[str] = []
+    block_sessions = "https://accounts.zoho.in/preannouncement/block-sessions"
+    markup = """<!doctype html>
+<title>Zoho Accounts</title>
+<a id="continue_button" class="blue_btn continue_button"
+   data-go="https://accounts.zoho.in/terminate-all-sessions">Terminate All Sessions</a>
+<a href="https://www.zoho.com">Zoho Corporation Pvt. Ltd.</a>
+"""
+
+    def serve(route):
+        visited.append(route.request.url)
+        body = markup + _CLICK_THROUGH if route.request.url == block_sessions else "<title>stub</title>"
+        route.fulfill(status=200, content_type="text/html", body=body)
+
+    page.route("**/*", serve)
+    page.goto(block_sessions)
+
+    with pytest.raises(RuntimeError, match="Terminate All Sessions"):
+        zb._dismiss_announcements_and_open_dashboard(page)
+    page.close()
+
+    assert visited == [block_sessions]
+
+
 # ── sign-out ─────────────────────────────────────────────────────────────────
 
 def test_sign_out_ends_the_session(browser):

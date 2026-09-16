@@ -67,24 +67,81 @@ def test_dry_run_reaches_the_browser_attempt(monkeypatch):
     assert attempts == [("checkin", True)]
 
 
-# ── what the widget label means ──────────────────────────────────────────────
+# ── today's attendance record ────────────────────────────────────────────────
 
-@pytest.mark.parametrize("action, label, decision", [
-    ("checkin", "check-in", (True, "checked-in")),
-    ("checkin", "check-out", (False, "already-checked-in")),
-    ("checkout", "check-out", (True, "checked-out")),
-    ("checkout", "check-in", (False, "already-checked-out")),
+def test_record_reads_a_completed_day():
+    # aria-labels of Wed 16's row on the Attendance page, as served 2026-09-17
+    labels = ["Wed 16", "Remote In Check-in Time: 01:04 PM", "Present",
+              "Check-out Time :  04:02 AM", "hours worked: 14:58"]
+
+    record = zb._parse_record(labels)
+
+    assert record == zb.AttendanceRecord(check_in="01:04 PM", check_out="04:02 AM")
+    assert record.checked_in is False
+
+
+def test_record_reads_an_open_check_in():
+    record = zb._parse_record(["Today 17", "Remote In Check-in Time: 12:00 PM", "Present",
+                               "hours worked: 00:00"])
+
+    assert record == zb.AttendanceRecord(check_in="12:00 PM", check_out=None)
+    assert record.checked_in is True
+
+
+def test_record_reads_a_day_with_no_entries():
+    record = zb._parse_record(["Today 17", "", "hours worked: 00:00"])
+
+    assert record == zb.AttendanceRecord(check_in=None, check_out=None)
+    assert record.checked_in is False
+
+
+# ── deciding from the button and the record ──────────────────────────────────
+
+NOT_IN = zb.AttendanceRecord(check_in=None, check_out=None)
+IN = zb.AttendanceRecord(check_in="12:00 PM", check_out=None)
+OUT = zb.AttendanceRecord(check_in="12:00 PM", check_out="10:00 PM")
+
+
+@pytest.mark.parametrize("action, label, record, decision", [
+    ("checkin", "check-in", NOT_IN, (True, "checked-in")),
+    ("checkin", "check-out", IN, (False, "already-checked-in")),
+    ("checkout", "check-out", IN, (True, "checked-out")),
+    ("checkout", "check-in", OUT, (False, "already-checked-out")),
+    ("checkout", "check-in", NOT_IN, (False, "already-checked-out")),
 ])
-def test_widget_label_decides_whether_to_click(action, label, decision):
-    assert zb._decide(action, label, dry_run=False) == decision
+def test_button_and_record_that_agree_decide_the_punch(action, label, record, decision):
+    assert zb._decide(action, label, record) == decision
 
 
-def test_dry_run_never_clicks():
-    should_click, result = zb._decide("checkin", "check-in", dry_run=True)
+@pytest.mark.parametrize("action, label, record", [
+    ("checkout", "check-in", IN),  # 2026-09-16 22:01: checked in, button said Check-in
+    ("checkin", "check-in", IN),
+    ("checkin", "check-out", NOT_IN),
+    ("checkout", "check-out", OUT),
+])
+def test_button_contradicting_the_record_stops_the_run(action, label, record):
+    with pytest.raises(zb.AttendanceMismatch):
+        zb._decide(action, label, record)
 
-    assert should_click is False
-    assert result == "dry-run: would click 'check-in' (checked-in)"
+
+# ── confirming a punch landed ────────────────────────────────────────────────
+
+def test_confirm_punch_rereads_until_the_record_shows_it(monkeypatch):
+    monkeypatch.setattr(zb, "_CONFIRM_WAIT_SECONDS", 0)
+    reads = iter([IN, IN, OUT])
+
+    assert zb._confirm_punch(lambda: next(reads), "checkout") == OUT
 
 
-def test_dry_run_still_reports_work_already_done():
-    assert zb._decide("checkout", "check-in", dry_run=True) == (False, "already-checked-out")
+def test_confirm_punch_gives_up_loudly(monkeypatch):
+    monkeypatch.setattr(zb, "_CONFIRM_WAIT_SECONDS", 0)
+    monkeypatch.setattr(zb, "_CONFIRM_ATTEMPTS", 3)
+    reads = []
+
+    def read():
+        reads.append(IN)
+        return IN
+
+    with pytest.raises(zb.AttendanceError, match="still shows"):
+        zb._confirm_punch(read, "checkout")
+    assert len(reads) == 3
