@@ -102,26 +102,17 @@ IN = zb.AttendanceRecord(check_in="12:00 PM", check_out=None)
 OUT = zb.AttendanceRecord(check_in="12:00 PM", check_out="10:00 PM")
 
 
-@pytest.mark.parametrize("action, label, record, decision", [
-    ("checkin", "check-in", NOT_IN, (True, "checked-in")),
-    ("checkin", "check-out", IN, (False, "already-checked-in")),
-    ("checkout", "check-out", IN, (True, "checked-out")),
-    ("checkout", "check-in", OUT, (False, "already-checked-out")),
-    ("checkout", "check-in", NOT_IN, (False, "already-checked-out")),
+@pytest.mark.parametrize("action, record, decision", [
+    ("checkin", NOT_IN, (True, "checked-in")),
+    ("checkin", IN, (False, "already-checked-in")),
+    ("checkout", IN, (True, "checked-out")),
+    ("checkout", OUT, (False, "already-checked-out")),
+    ("checkout", NOT_IN, (False, "already-checked-out")),
 ])
-def test_button_and_record_that_agree_decide_the_punch(action, label, record, decision):
-    assert zb._decide(action, label, record) == decision
-
-
-@pytest.mark.parametrize("action, label, record", [
-    ("checkout", "check-in", IN),  # 2026-09-16 22:01: checked in, button said Check-in
-    ("checkin", "check-in", IN),
-    ("checkin", "check-out", NOT_IN),
-    ("checkout", "check-out", OUT),
-])
-def test_button_contradicting_the_record_stops_the_run(action, label, record):
-    with pytest.raises(zb.AttendanceMismatch):
-        zb._decide(action, label, record)
+def test_the_record_decides_whether_a_punch_is_needed(action, record, decision):
+    # Zoho's button lags its own status, so the record decides; the button is
+    # only checked for agreement right before clicking (see test_punch_flow).
+    assert zb._needs_punch(action, record) == decision
 
 
 # ── confirming a punch landed ────────────────────────────────────────────────

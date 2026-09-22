@@ -15,9 +15,11 @@ PORTAL = "https://people.zoho.in/testorg/zp"
 
 
 class FakePeople:
-    def __init__(self, *, check_in=None, check_out=None, stale_button=False, punch_registers=True):
+    def __init__(self, *, check_in=None, check_out=None, stale_button=False,
+                 punch_registers=True, button_delay_ms=0):
         self.check_in, self.check_out = check_in, check_out
-        self.stale_button = stale_button          # the 2026-09-16 failure: wrong label
+        self.stale_button = stale_button          # a label that never catches up
+        self.button_delay_ms = button_delay_ms    # Zoho's status arriving late
         self.punch_registers = punch_registers
         self.punches = 0
         self.portal_loads = 0
@@ -43,7 +45,13 @@ class FakePeople:
             route.fulfill(status=404, body="")
 
     def _portal(self) -> str:
-        label = "Check-out" if self.checked_in and not self.stale_button else "Check-in"
+        # Zoho renders the button's default "Check-in" and only switches it when
+        # the attendance status arrives.
+        settled = "Check-out" if self.checked_in and not self.stale_button else "Check-in"
+        label = "Check-in" if self.button_delay_ms else settled
+        catch_up = ("" if not self.button_delay_ms else
+                    f"<script>setTimeout(() => document.querySelector('#home button')"
+                    f".innerText = '{settled}', {self.button_delay_ms});</script>")
         check_in = (f'<div class="zpl_attentrydtls" aria-label="Remote In Check-in Time: '
                     f'{self.check_in}"><b>{self.check_in}</b></div>') if self.check_in else ""
         check_out = (f'<div class="zpl_attentrydtls" aria-label="Check-out Time : '
@@ -69,6 +77,7 @@ class FakePeople:
       <td width="150"><div class="zpl_attentrydtls" aria-label="hours worked: 00:00"></div></td></tr>
   </tbody></table>
 </div>
+{catch_up}
 <script>
   document.querySelector('#zp_maintab_attendance').addEventListener('click', () => {{
     document.querySelector('#home').style.display = 'none';
@@ -96,6 +105,7 @@ def fast_timings(monkeypatch):
     monkeypatch.setattr(zb, "_POST_CLICK_MS", 500)
     monkeypatch.setattr(zb, "_CONFIRM_ATTEMPTS", 2)
     monkeypatch.setattr(zb, "_CONFIRM_WAIT_SECONDS", 0)
+    monkeypatch.setattr(zb, "_BUTTON_SETTLE_MS", 4000)
 
 
 def punch(browser, zoho: FakePeople, action: str, *, dry_run: bool = False) -> str:
@@ -122,8 +132,16 @@ def test_checks_in_when_today_has_no_entry(browser):
     assert (zoho.punches, zoho.check_in) == (1, "12:00 PM")
 
 
-def test_stale_check_in_button_while_checked_in_stops_without_clicking(browser):
-    # 2026-09-16 22:01: checked in since 01:04 PM, but the button said Check-in
+def test_waits_for_the_button_to_catch_up_with_the_record(browser):
+    # 2026-09-17..21: on a fresh dashboard the button reads "Check-in" for a few
+    # seconds before Zoho's status arrives, which skipped every checkout.
+    zoho = FakePeople(check_in="12:01 PM", button_delay_ms=2000)
+
+    assert punch(browser, zoho, "checkout") == "checked-out"
+    assert (zoho.punches, zoho.check_out) == (1, "10:00 PM")
+
+
+def test_button_that_never_catches_up_stops_without_clicking(browser):
     zoho = FakePeople(check_in="01:04 PM", stale_button=True)
 
     with pytest.raises(zb.AttendanceMismatch, match="01:04 PM"):

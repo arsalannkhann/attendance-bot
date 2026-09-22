@@ -443,22 +443,17 @@ def _parse_record(labels: list[str]) -> AttendanceRecord:
     return AttendanceRecord(check_in=check_in, check_out=check_out)
 
 
-def _decide(action: Action, label: str, record: AttendanceRecord) -> tuple[bool, str]:
-    """(click?, result) when the dashboard button and today's attendance record
-    agree on whether the user is checked in; AttendanceMismatch when they don't,
-    rather than guess which one is wrong."""
-    button_says_checked_in = "check-out" in label or "checkout" in label
-    if button_says_checked_in != record.checked_in:
-        raise AttendanceMismatch(
-            f"Zoho's attendance record: {record}; but the dashboard button says {label!r}. "
-            "Not clicking a button that contradicts the record."
-        )
+def _needs_punch(action: Action, record: AttendanceRecord) -> tuple[bool, str]:
+    """(click?, result) from Zoho's own record. The dashboard button can't decide
+    this: it renders its default "Check-in" until the attendance status arrives."""
     if action == "checkin":
         return (False, "already-checked-in") if record.checked_in else (True, "checked-in")
     return (True, "checked-out") if record.checked_in else (False, "already-checked-out")
 
 
-# Waits around the punch click, and how long to look for it in the record.
+# Waits around the punch click, how long to give the button to catch up with
+# Zoho's status, and how long to look for the punch in the record.
+_BUTTON_SETTLE_MS = 45_000
 _PRE_CLICK_MS = 3000
 _POST_CLICK_MS = 5000
 _CONFIRM_ATTEMPTS = 4
@@ -496,19 +491,33 @@ _TODAY_LABELS_JS = """
 """
 
 
-def _read_button(page) -> str:
-    """The dashboard punch button's label, lowercased. Waits for its text, not its
-    aria-label, which stays "Check-in" whatever the state. The zpl_btnloading /
-    zbutton--loading classes are permanent, so they're not a readiness signal."""
+def _wait_for_button(page, record: AttendanceRecord) -> str:
+    """The dashboard punch button's label, once it agrees with `record`.
+
+    A freshly loaded dashboard renders the button's default "Check-in" and only
+    switches to "Check-out" when Zoho's attendance status arrives seconds later.
+    Reading it too early skipped every checkout from 2026-09-17 to 09-21. Its
+    aria-label is no help: it stays "Check-in" whatever the state. Raises when
+    the label never catches up, rather than punch against the record."""
     page.wait_for_selector(_BUTTON, state="visible", timeout=45_000)
-    page.wait_for_function(
-        """(selector) => {
-            const b = document.querySelector(selector);
-            return b && /check-?in|check-?out/i.test(b.innerText || '');
-        }""",
-        arg=_BUTTON,
-        timeout=45_000,
-    )
+    want = "check-out" if record.checked_in else "check-in"
+    try:
+        page.wait_for_function(
+            """([selector, want]) => {
+                const b = document.querySelector(selector);
+                if (!b) return false;
+                return (b.innerText || '').trim().toLowerCase().replace('-', '').includes(want);
+            }""",
+            arg=[_BUTTON, want.replace("-", "")],
+            timeout=_BUTTON_SETTLE_MS,
+        )
+    except PWTimeout:
+        label = page.locator(_BUTTON).inner_text().strip().lower()
+        raise AttendanceMismatch(
+            f"Zoho's attendance record: {record}; but the dashboard button still says "
+            f"{label!r} after {_BUTTON_SETTLE_MS // 1000}s, so it never showed {want!r}. "
+            "Not clicking a button that contradicts the record."
+        ) from None
     label = page.locator(_BUTTON).inner_text().strip().lower()
     log.info("Widget text: %s", label.replace("\n", " "))
     return label
@@ -538,31 +547,28 @@ def _open_portal(page, portal: str) -> None:
 
 
 def _punch(page, action: Action, *, dry_run: bool = False) -> str:
-    """From the signed-in People portal: decide from the dashboard button and
-    today's attendance record together, click only when both agree a punch is
-    needed, then confirm the punch in the record. With `dry_run`, stops right
-    before the click."""
+    """From the signed-in People portal: decide from today's attendance record,
+    click only once the dashboard button agrees with it, then confirm the punch
+    in the record. With `dry_run`, stops right before the click."""
     portal = page.url.split("#", 1)[0]
-    label = _read_button(page)
     record = _read_record(page)
-    should_click, result = _decide(action, label, record)
+    should_click, result = _needs_punch(action, record)
     if not should_click:
         return result
 
-    # Check the button again on a fresh load, right before clicking it.
+    # Fresh dashboard, then wait for the button to show what the record says.
     _open_portal(page, portal)
-    label = _read_button(page)
-    _decide(action, label, record)
+    _wait_for_button(page, record)
+    page.wait_for_timeout(_PRE_CLICK_MS)
+    label = _wait_for_button(page, record)  # the status can still arrive late
     if dry_run:
         return f"dry-run: would click {label!r} ({result})"
 
-    page.wait_for_timeout(_PRE_CLICK_MS)
     page.locator(_BUTTON).click(delay=200)
     page.wait_for_timeout(_POST_CLICK_MS)
 
     def reread() -> AttendanceRecord:
         _open_portal(page, portal)
-        _read_button(page)
         return _read_record(page)
 
     _confirm_punch(reread, action)
