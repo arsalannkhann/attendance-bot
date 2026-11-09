@@ -1,122 +1,197 @@
-<div align="center">
-  <img src="https://img.icons8.com/color/144/000000/zoho.png" alt="Zoho Logo" width="100"/>
-  <h1>Zoho Attendance Bot</h1>
-  <p><strong>Checks you in/out of Zoho People at exact IST times. A Render service keeps the clock and a GitHub Actions runner drives the browser, so there's no cron drift, no out-of-memory kills, and no missed days.</strong></p>
+# Attendance Bot
 
-  <p>
-    <img alt="Python" src="https://img.shields.io/badge/Python-3.11+-blue.svg" />
-    <img alt="Playwright" src="https://img.shields.io/badge/Playwright-1.59-orange.svg" />
-    <img alt="Render" src="https://img.shields.io/badge/Render-Blueprint-46E3B7.svg" />
-    <img alt="Free tier" src="https://img.shields.io/badge/cost-$0%2Fmo-success.svg" />
-  </p>
-</div>
+A scheduled browser-automation service that performs the daily check-in and check-out on a web-based HR portal. A small always-on service keeps exact time, and a GitHub Actions runner drives a headless Chromium (Playwright) to log in, clear MFA, and press the attendance button.
 
----
+![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
+![Playwright](https://img.shields.io/badge/Playwright-1.59-orange.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-service-009688.svg)
+![Render](https://img.shields.io/badge/Render-Blueprint-46E3B7.svg)
+![Cost](https://img.shields.io/badge/cost-%240%2Fmo-success.svg)
 
-## Why this exists
+> This is a generic template. It contains no credentials, accounts or organisation-specific data. Everything is configured through environment variables and repository secrets.
 
-GitHub Actions cron is best-effort — schedules drift by 5–30+ min during peak hours and sometimes skip outright. Sleeping inside the workflow until the IST target burns runner minutes and still fails when the dispatch never arrives.
+## Features
 
-Running the browser on Render's free instance has the opposite problem: it has 512 MB of memory and 0.15 CPU, and Chromium plus the Zoho People app needs nearly all of it. Runs crawl, time out, and eventually get killed for running out of memory.
+- **Exact-time scheduling**: APScheduler cron pinned to a timezone (default `Asia/Kolkata`), Mon–Fri, firing within about a second.
+- **Offloaded browser**: each fire dispatches a GitHub Actions workflow, so Chromium runs on a 7 GB runner instead of a 512 MB free instance.
+- **Self-healing**: a startup catch-up reads GitHub's run history and re-dispatches any recent fire that has no successful run.
+- **Two MFA strategies**: TOTP (preferred) or one-time codes read from a mailbox via Microsoft Graph.
+- **Safe punching**: decides from the portal's attendance record, confirms the punch afterwards, and never ends other sessions.
+- **Resilient**: 3 retries with exponential backoff (10 s → 20 s → 40 s), small random jitter, weekend guard, sign-out after every run.
+- **Observable**: health and status endpoints, run logs, and failure screenshots uploaded as run artifacts.
+- **Manual trigger**: token-protected `POST /run` endpoint and a dry-run mode that never clicks.
 
-So this version splits the work. A **Render Web Service** runs an in-process `APScheduler` cron pinned to `Asia/Kolkata` that fires within ~1 second of the configured time. Each fire **dispatches a GitHub Actions workflow**, and the browser runs on GitHub's runner (7 GB of memory). If the Render service restarts around a fire, a startup catch-up reads GitHub's run history and re-dispatches anything that didn't succeed. A 10-minute self-ping keeps the free instance awake. Total cost: **$0/month** (about 5 runner-minutes a day, well inside GitHub's free allowance).
+## How it works
+
+### System architecture
+
+```mermaid
+flowchart LR
+    USER(["You<br/>curl / browser"])
+
+    subgraph RENDER["Render web service (free tier): the clock"]
+        direction TB
+        API["FastAPI<br/>/ · /healthz · /status · POST /run"]
+        SCH["APScheduler<br/>cron Mon–Fri, IST"]
+        CATCH["Startup catch-up<br/>last 2 h"]
+        PING["Self-ping<br/>every 10 min"]
+        DISP["github_dispatch.py<br/>dispatch and watch run"]
+        PING -- "GET /healthz" --> API
+        API -- "manual trigger" --> DISP
+        SCH -- "check-in / check-out" --> DISP
+        CATCH -- "missed fire" --> DISP
+    end
+
+    subgraph GHA["GitHub Actions runner (7 GB)"]
+        direction TB
+        WF["attendance workflow<br/>workflow_dispatch"]
+        BOT["zoho_browser.py<br/>Playwright Chromium"]
+        MAIL["outlook.py<br/>OTP fetcher"]
+        WF --> BOT
+        BOT -. "only if no TOTP secret" .-> MAIL
+    end
+
+    USER --> API
+    DISP -- "workflow_dispatch<br/>GitHub API" --> WF
+    DISP -. "poll run status, run history" .-> WF
+    BOT <--> PORTAL[("HR portal<br/>web app")]
+    MAIL <--> GRAPH[("Mailbox<br/>Microsoft Graph")]
+```
+
+Without `GH_DISPATCH_TOKEN` the service falls back to running Chromium in-process on Render. That works, but the free instance often runs out of memory, and the catch-up stays off.
+
+### Execution flow
+
+```mermaid
+flowchart TD
+    A([Fire: cron, catch-up or POST /run]) --> B{GH_DISPATCH_TOKEN set?}
+    B -- no --> LOCAL[Run browser in-process on Render]
+    B -- yes --> C[Dispatch workflow via GitHub API]
+    C --> D[Poll run until it completes]
+    D --> LOG([Log result and run URL])
+
+    C -.-> W
+    LOCAL --> W
+
+    subgraph RUN["Browser run (zoho_browser.py)"]
+        direction TB
+        W{Weekend and not forced?} -- yes --> SKIP([weekend-skip])
+        W -- no --> J[Random jitter 0–60 s]
+        J --> CFG[Load config from env]
+        CFG --> AT[Attempt N of 3]
+        AT --> L1[Launch headless Chromium]
+        L1 --> L2[Open sign-in page]
+        L2 --> L3[Enter email, then password]
+        L3 --> L4{Password rejected?}
+        L4 -- yes --> L5{Email-OTP<br/>fallback?}
+        L5 -- no --> FAIL
+        L5 -- yes --> M0
+        L4 -- no --> M0{MFA prompt?}
+        M0 -- no --> I
+        M0 -- yes --> M1{TOTP secret set?}
+        M1 -- yes --> M2[Generate TOTP code]
+        M1 -- no --> M3[Poll mailbox for OTP email]
+        M2 --> M4[Submit code, trust browser]
+        M3 --> M4
+        M4 --> I[Dismiss interstitials<br/>session limit, 2FA nag, time-zone prompt]
+        I --> N[Open the dashboard]
+        N --> R[Read the attendance record<br/>and the widget button]
+        R --> T{Record and button agree?}
+        T -- no --> FAIL
+        T -- yes --> U{Already in the<br/>requested state?}
+        U -- yes --> OK1([already-checked-in / out])
+        U -- no --> P{Dry run?}
+        P -- yes --> OK2([dry-run: would click])
+        P -- no --> CL[Click the widget]
+        CL --> V[Re-check the attendance record]
+        V --> OK3([checked-in / checked-out])
+        L1 -.-> FAIL
+        L2 -.-> FAIL
+        R -.-> FAIL
+        V -.-> FAIL
+        FAIL[Save screenshot, HTML and element scan] --> Y{Attempts left?}
+        Y -- yes --> BO[Backoff 10 / 20 / 40 s]
+        BO --> AT
+        Y -- no --> END([Exit non-zero])
+    end
+```
+
+### Request sequence (smoke test)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as You
+    participant API as Render service
+    participant GH as GitHub Actions
+    participant B as Browser (Playwright)
+    participant P as HR portal
+    participant M as Mailbox (Graph)
+
+    U->>API: POST /run?action=checkin&force=true<br/>X-Trigger-Token
+    API-->>U: 200 {"status":"started"}
+    API->>GH: workflow_dispatch (action, force, source)
+    GH->>B: python zoho_browser.py
+    B->>P: sign in (email, password)
+    P-->>B: MFA challenge
+    alt TOTP configured
+        B->>B: generate code locally
+    else Mailbox fallback
+        B->>M: poll for OTP email
+        M-->>B: 6–7 digit code
+    end
+    B->>P: submit code
+    P-->>B: dashboard
+    B->>P: read attendance record and button
+    B->>P: click if needed, then re-check the record
+    B-->>GH: exit 0 (or non-zero on failure)
+    GH-->>API: run completed (polled)
+    API->>API: log "GitHub run succeeded" and URL
+```
+
+### Why the work is split
+
+GitHub Actions cron is best-effort and drifts by 5–30+ minutes at peak times, so the schedule lives on a small service instead. Running the browser on that service's free instance has the opposite problem: 512 MB of memory is not enough for Chromium plus a heavy single-page app, so runs crawl and get killed. The service therefore keeps the clock and GitHub runs the browser, at about 5 runner-minutes a day.
 
 ### Schedule (configurable)
+
 | Action | Time (IST) | Days |
 |--------|------------|------|
 | Check-in | `12:00` | Mon–Fri |
 | Check-out | `22:00` | Mon–Fri |
 
-A small randomised 0–60 s jitter is added so it doesn't look mechanical. Failures retry 3× with exponential backoff (10 s → 20 s → 40 s).
+A random 0–60 s jitter is added so the timing isn't perfectly mechanical.
 
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│ Render Web Service (Docker, free tier): the clock        │
-│                                                          │
-│   FastAPI ── /healthz  /status  POST /run                │
-│       │                                                  │
-│       ├── APScheduler (BackgroundScheduler, IST tz)      │
-│       │      ├── cron Mon-Fri 12:00 → dispatch checkin   │
-│       │      └── cron Mon-Fri 22:00 → dispatch checkout  │
-│       │                                                  │
-│       └── startup catch-up: re-dispatch a fire from the  │
-│           last 2 h that has no successful run            │
-└─────────────────────────────┬────────────────────────────┘
-                              │ workflow_dispatch via GitHub API; Render
-                              │ then polls the run and logs its result
-┌─────────────────────────────▼────────────────────────────┐
-│ GitHub Actions: attendance.yml (7 GB runner)             │
-│                                                          │
-│   python zoho_browser.py   (one run at a time)           │
-│       └── Playwright Chromium → Zoho People              │
-│              └── MFA (TOTP or Outlook)                   │
-│   failure screenshots → run artifacts (7 days)           │
-└──────────────────────────────────────────────────────────┘
-```
-
-Without `GH_DISPATCH_TOKEN` the service falls back to running Chromium in-process on Render (the old behaviour, with its memory problems) and the catch-up stays off.
-
----
-
-## Setup — fork and deploy
+## Setup: fork and deploy
 
 ### Prerequisites
-- A **Zoho People** account with attendance widget enabled
-- A **Render** account (free) — sign up at https://render.com
-- A **GitHub** account (to fork this repo so Render can autodeploy on push)
-- Either:
-  - A **TOTP secret** for your Zoho MFA *(recommended — most reliable)*, **OR**
-  - An **Outlook/M365 mailbox** the Zoho OTP emails get delivered to *(falls back if TOTP not set)*
 
-### Step 1 — Fork
+- An account on the supported HR portal, with the attendance widget enabled
+- A free **Render** account
+- A **GitHub** account (to fork the repo so Render can auto-deploy on push)
+- Either a **TOTP secret** for the portal's MFA *(recommended)*, or an **Outlook / M365 mailbox** that receives the OTP emails
 
-Click **Fork** at the top right of this repo. You'll get a copy at `https://github.com/<your-user>/zoho-bot`.
+### Step 1: Fork
 
-### Step 2 — Get your secrets ready
+Fork this repository to `https://github.com/<your-user>/attendance-bot`.
 
-Have these values handy before deploying — Render asks for them during Blueprint setup.
+### Step 2: Gather your secrets
 
-#### `ZOHO_EMAIL` *(required)*
-Your Zoho login email, e.g. `you@company.com`.
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `ZOHO_EMAIL` | yes | Portal login email |
+| `ZOHO_PASSWORD` | yes | Portal password |
+| `ZOHO_TOTP` | recommended | The long TOTP secret behind the QR code, not the 6-digit code. In the portal's account security page choose MFA → authenticator app → "Can't scan? Show secret key". Disable and re-enable TOTP if you can't see it again. |
+| `OUTLOOK_EMAIL` + `OUTLOOK_PASSWORD` | only if no TOTP | Mailbox receiving the OTP emails. If your tenant enforces MFA, use an app password (account.microsoft.com → Security → Advanced). Personal Outlook accounts usually work directly. |
+| `TRIGGER_TOKEN` | auto | Render generates it from `render.yaml`. Use it for the manual `/run` endpoint. |
 
-#### `ZOHO_PASSWORD` *(required)*
-Your Zoho password.
+### Step 3: Deploy via Blueprint
 
-#### `ZOHO_TOTP` *(recommended)*
-Your TOTP secret string (NOT the 6-digit code — the long secret behind the QR code).
+1. In Render: **New → Blueprint**, connect GitHub, select your fork.
+2. Render reads `render.yaml` and proposes a Docker web service in Singapore.
+3. Fill in the secret variables when prompted, then click **Apply**.
 
-To extract it:
-1. Zoho → **My Account** → **Multi-Factor Authentication** → **OneAuth/TOTP**
-2. When setting up, click **Can't scan? Show secret key**
-3. Copy the long alphanumeric string (looks like `JBSWY3DPEHPK3PXP...`)
-
-If you already have TOTP enabled and can't see the secret, disable & re-enable it to see it again.
-
-#### `OUTLOOK_EMAIL` + `OUTLOOK_PASSWORD` *(only if no TOTP)*
-The mailbox that receives Zoho's OTP emails. **Important:**
-- If your M365 tenant requires MFA, the password-grant flow this bot uses is blocked. You'll need an **App Password**: account.microsoft.com → Security → Advanced → App passwords.
-- Personal Outlook (`@outlook.com`, `@hotmail.com`) usually works directly.
-- TOTP is more reliable; prefer it if you can.
-
-#### `TRIGGER_TOKEN` *(auto-generated)*
-Render generates this for you from `render.yaml`. You'll grab it from the dashboard after deploy to use the manual `/run` endpoint.
-
-### Step 3 — Deploy via Blueprint
-
-1. Go to https://dashboard.render.com → **New** → **Blueprint**
-2. Connect your GitHub account if you haven't already
-3. Select your forked **zoho-bot** repo
-4. Render reads `render.yaml` and proposes a Docker web service named `zoho-attendance-bot` in Singapore
-5. Fill in the secret env vars when prompted (see Step 2). Required: `ZOHO_EMAIL`, `ZOHO_PASSWORD`. Optional: `ZOHO_TOTP` *or* `OUTLOOK_EMAIL`+`OUTLOOK_PASSWORD`
-6. Click **Apply**
-
-First build pulls the Playwright base image (~600 MB, ~3–5 min). Subsequent deploys are much faster.
-
-When you see `Your service is live 🎉` in the deploy logs, hit your service URL — you should get JSON like:
+The first build pulls the Playwright base image (about 600 MB, 3–5 minutes). Open the service URL afterwards and you should see:
 
 ```json
 {
@@ -133,90 +208,66 @@ When you see `Your service is live 🎉` in the deploy logs, hit your service UR
 }
 ```
 
-### Step 4 — Run the browser on GitHub Actions
+### Step 4: Run the browser on GitHub Actions
 
-1. **Add the Zoho secrets to GitHub.** Open your fork → **Settings** → **Secrets and variables** → **Actions**, and add `ZOHO_EMAIL`, `ZOHO_PASSWORD`, and either `ZOHO_TOTP` or `OUTLOOK_EMAIL` + `OUTLOOK_PASSWORD`. Use the same values you gave Render.
-2. **Enable the workflow.** On the **Actions** tab, open *Zoho People Attendance (Browser)* and click **Enable workflow** if it's disabled. It has no schedule of its own and only runs when dispatched.
-3. **Create a token.** Go to https://github.com/settings/personal-access-tokens → **Generate new token** (fine-grained). Under repository access pick only your fork, and under repository permissions set **Actions: Read and write**. Pick a long expiry and note the date: when the token expires, dispatches fail until you replace it.
-4. **Give the token to Render.** In the service's **Environment** tab, add `GH_DISPATCH_TOKEN`. Render redeploys, and the log should show `Browser runs on GitHub Actions (<you>/zoho-bot, attendance.yml@main)`.
+1. **Add secrets to GitHub.** Fork → **Settings → Secrets and variables → Actions**. Add `ZOHO_EMAIL`, `ZOHO_PASSWORD`, and either `ZOHO_TOTP` or `OUTLOOK_EMAIL` + `OUTLOOK_PASSWORD`, with the same values you gave Render.
+2. **Enable the workflow.** On the **Actions** tab, open the attendance workflow and click **Enable workflow** if needed. It has no schedule of its own and only runs when dispatched.
+3. **Create a token.** GitHub → Settings → Developer settings → fine-grained tokens. Select only your fork and set **Actions: Read and write**. Note the expiry: dispatches fail once it expires.
+4. **Give it to Render.** Add `GH_DISPATCH_TOKEN` in the service's **Environment** tab. After the redeploy the log shows `Browser runs on GitHub Actions (<you>/attendance-bot, attendance.yml@main)`.
 
-### Step 5 — Smoke-test before relying on it
+### Step 5: Smoke-test
 
-First, a **dry run**. It logs in and reads the attendance button without clicking it, so it's safe at any time:
+A **dry run** logs in and reads the button without clicking, so it is safe at any time:
 
 ```bash
 gh workflow run attendance.yml -f action=checkin -f dry_run=true
+gh run watch
 ```
 
-In the run's log (`gh run watch`), look for `Widget text: check-in` followed by `Result: dry-run: would click 'check-in' (checked-in)`.
+Look for `Widget text: check-in` followed by `Result: dry-run: would click 'check-in'`.
 
-Then test the Render → GitHub path end to end. Grab the `TRIGGER_TOKEN` from your Render dashboard → service → **Environment** tab → click the eye icon next to `TRIGGER_TOKEN` to reveal, then **Copy**. This fires a **real** check-in (`force=true` bypasses the weekend gate so you can test on any day):
+Then test the Render → GitHub path end to end. This fires a **real** punch, and `force=true` bypasses the weekend gate:
 
 ```bash
 curl -X POST "https://<your-service>.onrender.com/run?action=checkin&force=true" \
-     -H "X-Trigger-Token: <paste-token>"
+     -H "X-Trigger-Token: <your-token>"
 ```
 
-Expected reply: `{"status":"started","action":"checkin","force":true}`.
+Expected reply: `{"status":"started","action":"checkin","force":true}`. In the Render logs you should see the dispatch, the run moving from `queued` to `completed`, and `GitHub run succeeded` with a link. To undo the test, run `action=checkout` the same way.
 
-Then watch the Render **Logs** tab. Within a few minutes you should see:
-
-```
-Scheduler firing: checkin (force=True, source=api)
-Dispatched checkin to GitHub Actions: https://github.com/<you>/zoho-bot/actions/runs/<id>
-GitHub run <id>: queued
-GitHub run <id>: in_progress
-GitHub run <id>: completed
-Scheduler job checkin done: GitHub run succeeded — https://github.com/<you>/zoho-bot/actions/runs/<id>
-```
-
-Verify in Zoho People that you're checked in. To undo the test, fire `action=checkout` the same way.
-
-You're done. Monday 12:00 IST you check in, Monday 22:00 IST you check out, and so on.
-
----
-
-## Endpoints
+## API
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| `GET`  | `/`        | Service info + next fire times | — |
-| `GET`  | `/healthz` | Liveness probe (used by Render and the self-ping) | — |
-| `GET`  | `/status`  | Scheduler running state + next runs | — |
+| `GET` | `/` | Service info and next run times | none |
+| `GET` | `/healthz` | Liveness probe (Render and the self-ping) | none |
+| `GET` | `/status` | Scheduler state and next runs | none |
 | `POST` | `/run?action=checkin\|checkout[&force=true]` | Manual trigger | `X-Trigger-Token` header |
 
-`force=true` skips both the weekend gate and the humanising jitter — use it for smoke tests on Sat/Sun.
+`force=true` skips both the weekend gate and the jitter, so you can test on any day.
 
----
+## Configuration
 
-## Configuration knobs
+All optional, set in the Render **Environment** tab. A change triggers a redeploy.
 
-All optional env vars (set in Render Environment tab):
-
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `CHECKIN_HOUR` | `12` | Hour-of-day (IST) for check-in |
-| `CHECKIN_MIN`  | `0`  | Minute-of-hour for check-in |
-| `CHECKOUT_HOUR`| `22` | Hour-of-day (IST) for check-out |
-| `CHECKOUT_MIN` | `0`  | Minute-of-hour for check-out |
-| `SELF_PING_INTERVAL` | `600` | Self-ping interval in seconds (10 min) |
-| `SELF_PING_URL` | *(auto)* | Override the self-ping URL; auto-derived from `RENDER_EXTERNAL_URL` |
-| `GH_DISPATCH_TOKEN` | *(unset)* | Fine-grained GitHub token with **Actions: Read and write**. Set: the browser runs on GitHub Actions. Unset: it runs in-process on Render |
-| `GH_DISPATCH_REPO` | *(auto)* | `owner/repo` to dispatch; auto-derived from `RENDER_GIT_REPO_SLUG` |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CHECKIN_HOUR` / `CHECKIN_MIN` | `12` / `0` | Check-in time (IST) |
+| `CHECKOUT_HOUR` / `CHECKOUT_MIN` | `22` / `0` | Check-out time (IST) |
+| `SELF_PING_INTERVAL` | `600` | Self-ping interval in seconds |
+| `SELF_PING_URL` | *(auto)* | Override the ping URL; derived from `RENDER_EXTERNAL_URL` |
+| `GH_DISPATCH_TOKEN` | *(unset)* | Token with **Actions: Read and write**. Set: browser runs on GitHub. Unset: it runs in-process on Render. |
+| `GH_DISPATCH_REPO` | *(auto)* | `owner/repo` to dispatch; derived from `RENDER_GIT_REPO_SLUG` |
 | `GH_DISPATCH_WORKFLOW` | `attendance.yml` | Workflow file to dispatch |
-| `GH_DISPATCH_REF` | *(auto)* | Branch the workflow runs on; defaults to the deployed branch (`RENDER_GIT_BRANCH`) |
-| `CATCHUP_WINDOW_MINUTES` | `120` | On startup, re-dispatch a fire from the last N minutes that has no successful run |
-| `DEBUG_DIR` | `/tmp/attendance-debug` | Where Playwright failure screenshots are saved (on GitHub, uploaded as run artifacts) |
-
-Change a value → Render auto-redeploys.
-
----
+| `GH_DISPATCH_REF` | *(auto)* | Branch to run; defaults to the deployed branch |
+| `CATCHUP_WINDOW_MINUTES` | `120` | On startup, re-dispatch a fire from the last N minutes with no successful run |
+| `DEBUG_DIR` | `/tmp/attendance-debug` | Failure screenshots (uploaded as run artifacts on GitHub) |
 
 ## Local development
 
 ```bash
-git clone https://github.com/<your-user>/zoho-bot.git
-cd zoho-bot
+git clone https://github.com/<your-user>/attendance-bot.git
+cd attendance-bot
 
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -227,93 +278,57 @@ playwright install chromium
 # one-off CLI run (DRY_RUN=true logs in without clicking):
 ACTION=checkin DRY_RUN=true python zoho_browser.py
 
-# full service (scheduler + endpoints) on http://localhost:8000:
+# full service (scheduler and endpoints) on http://localhost:8000:
 uvicorn app:app --reload --port 8000
 
-# tests (no network; tests/test_interstitials.py drives headless Chromium
-# and skips itself if `playwright install chromium` hasn't been run):
+# tests (no network; the interstitial tests drive headless Chromium and
+# skip themselves if `playwright install chromium` hasn't been run):
 pip install -r requirements-dev.txt
 pytest
 ```
 
----
-
 ## Troubleshooting
 
-### Build fails with `ZoneInfoNotFoundError: 'No time zone found with key Asia/Kolkata'`
-You're on an old commit. Pull latest — the Dockerfile installs `tzdata` via apt and `requirements.txt` includes the pip `tzdata` fallback.
-
-### Build hangs at `Configuring tzdata` / `Please select the geographic area in which you live`
-Same — pull latest. The fix sets `DEBIAN_FRONTEND=noninteractive` and pre-seeds `/etc/timezone`.
-
-### `BrowserType.launch: Executable doesn't exist at /ms-playwright/chromium_headless_shell-...`
-Mismatch between the Playwright pip version and the Docker base image tag. They must move together — both are pinned to `1.59.0` in this repo. If you bump one, bump the other.
-
-### `RuntimeError: Missing env vars: ZOHO_EMAIL, ZOHO_PASSWORD`
-You created the service manually instead of via Blueprint. Add the secrets in **Environment** tab.
-
-### `RuntimeError: OTP required but no source configured`
-Zoho is asking for MFA but neither `ZOHO_TOTP` nor `OUTLOOK_EMAIL`+`OUTLOOK_PASSWORD` are set. Add one.
-
-### `MFA is REQUIRED on this account. ROPC (password grant) will not work without an App Password.`
-Your M365 tenant blocks password-grant. Either generate an App Password (account.microsoft.com → Security → Advanced) or switch to TOTP.
-
-### Render restarts mid-run, or runs time out at `Locator.click` / `wait_for_selector`
-The browser is running on Render's free instance and running out of memory: it needs about 500 MB of the 512 MB. Set up [Step 4](#step-4--run-the-browser-on-github-actions) so it runs on GitHub instead.
-
-### `Scheduler job ... failed: GitHub API returned HTTP 4xx`
-The log line ends with GitHub's own message. Usual causes:
-- **401:** the token expired or was revoked. Create a new one and update `GH_DISPATCH_TOKEN`.
-- **403 / 404:** the token can't see the repo or lacks **Actions: Read and write**, or `GH_DISPATCH_REPO` / `GH_DISPATCH_WORKFLOW` is wrong.
-- **422:** the workflow is disabled, or the branch's `attendance.yml` doesn't declare the inputs Render sends. Enable it and make sure the branch is up to date.
-
-### `Zoho's attendance record: ...; but the dashboard button says ...`
-The bot reads the dashboard's attendance button **and** today's entry on the Attendance page, and only clicks when they agree. On 2026-09-16 the button said "Check-in" for hours while the user was checked in, so the 22:00 checkout silently did nothing. Now a disagreement fails the run without clicking. Punch manually in Zoho, and check the run's screenshots (`gh run download <run-id>`).
-
-### `Clicked checkin/checkout, but Zoho's attendance record still shows: ...`
-The click went through, but the Attendance page didn't show the punch after four checks about 10 s apart. Check Zoho People and punch manually if needed.
-
-### `Zoho is blocking sign-in until other sessions end`
-Too many active Zoho sessions. The bot won't click "Terminate All Sessions", which signs you out everywhere. End old sessions in Zoho Accounts → Sessions, then re-run. Every run signs out when it finishes, so this shouldn't recur.
-
-### Login fails / widget not found
-Open the Render **Logs** tab and follow the GitHub run link from the failed job. The run log has the full attempt, and every failure uploads a full-page screenshot as a run artifact:
-
-```bash
-gh run download <run-id>
-```
-
-Without GitHub dispatch, the screenshot is saved on the Render instance at `/tmp/attendance-debug/<timestamp>-<action>.png` (the free tier has no shell to fetch it).
-
-Common cause: Zoho's login page changed selectors. Open an issue with the screenshot and the captured `Widget text:` line.
-
----
+| Symptom | Cause and fix |
+|---------|---------------|
+| `ZoneInfoNotFoundError: 'No time zone found with key Asia/Kolkata'` | Old commit. Pull latest: the Dockerfile installs `tzdata` and `requirements.txt` has the pip fallback. |
+| Build hangs at `Configuring tzdata` | Same: pull latest, which sets `DEBIAN_FRONTEND=noninteractive` and pre-seeds `/etc/timezone`. |
+| `BrowserType.launch: Executable doesn't exist` | The pip `playwright` version and the Docker base image tag differ. Both are pinned to `1.59.0`; change them together. |
+| `Missing env vars: ...` | Secrets not set. Add them in the Environment tab (or as GitHub secrets for the workflow). |
+| `OTP required but no source configured` | MFA was requested but neither `ZOHO_TOTP` nor the mailbox variables are set. |
+| `MFA is REQUIRED on this account. ROPC ...` | The tenant blocks password grant. Use an app password or switch to TOTP. |
+| Render restarts mid-run, or `Locator.click` / `wait_for_selector` time out | The browser is running on the 512 MB free instance and running out of memory. Complete [Step 4](#step-4-run-the-browser-on-github-actions). |
+| `GitHub API returned HTTP 401` | The token expired or was revoked. Create a new one and update `GH_DISPATCH_TOKEN`. |
+| `GitHub API returned HTTP 403 / 404` | The token can't see the repo or lacks **Actions: Read and write**, or `GH_DISPATCH_REPO` / `GH_DISPATCH_WORKFLOW` is wrong. |
+| `GitHub API returned HTTP 422` | The workflow is disabled, or the branch's workflow file lacks the inputs the service sends. Enable it and update the branch. |
+| `attendance record: ...; but the dashboard button says ...` | The record and the button disagree. The bot refuses to click. Punch manually and check the run's screenshots (`gh run download <run-id>`). |
+| `Clicked ..., but the attendance record still shows: ...` | The click went through but the record didn't update after four checks about 10 s apart. Check the portal and punch manually if needed. |
+| `blocking sign-in until other sessions end` | Too many active sessions. The bot never terminates them. End old sessions in the portal's account page, then re-run. |
+| Login fails or the widget isn't found | Follow the GitHub run link from the failed job and download its screenshot artifact. The portal's markup may have changed, so check the selectors in `zoho_browser.py`. |
 
 ## Security notes
 
-- **Never commit secrets.** `.env` is gitignored.
-- **Rotate `TRIGGER_TOKEN`** if you ever paste it in chat, an issue, or a screenshot. Render → Environment → edit → Save → service redeploys.
-- **Rotate Zoho/Outlook passwords** if they're ever exposed.
-- **The token-protected `/run` endpoint** is open to the internet. If you don't need manual triggers, set `TRIGGER_TOKEN` to a long random value (Render auto-generates one).
-
----
+- Never commit secrets. `.env` is gitignored.
+- Rotate `TRIGGER_TOKEN` if it appears in a chat, issue or screenshot (Render → Environment → edit → Save).
+- Rotate the portal and mailbox passwords if they are ever exposed, and replace `GH_DISPATCH_TOKEN` before it expires.
+- `/run` is reachable from the internet. Keep `TRIGGER_TOKEN` a long random value (Render generates one).
+- Use this only with accounts you own, and follow the policies of the service you automate.
 
 ## Files in this repo
 
 | File | What it does |
 |------|--------------|
-| `app.py` | FastAPI service + APScheduler, endpoints, self-ping, startup catch-up |
-| `github_dispatch.py` | Dispatches `attendance.yml`, watches the run, reads run history |
-| `.github/workflows/attendance.yml` | The GitHub Actions job that runs the browser |
-| `zoho_browser.py` | Playwright automation (login, MFA, click widget) |
-| `outlook.py` | Microsoft Graph poll for Zoho OTP emails |
-| `Dockerfile` | Builds container; installs `tzdata`, pins Playwright |
+| `app.py` | FastAPI service, APScheduler, endpoints, self-ping, startup catch-up |
+| `github_dispatch.py` | Dispatches the workflow, watches the run, reads run history |
+| `.github/workflows/attendance.yml` | GitHub Actions job that runs the browser |
+| `.github/workflows/keep-alive.yml` | Keeps the repo active so scheduled workflows aren't disabled |
+| `zoho_browser.py` | Playwright automation: login, MFA, interstitials, punch, confirm |
+| `outlook.py` | Microsoft Graph poll for OTP emails |
+| `Dockerfile` | Container build; installs `tzdata`, pins Playwright |
 | `render.yaml` | Blueprint: web service, env vars, health check, region |
-| `requirements.txt` | Python deps with version pins |
-| `requirements-dev.txt`, `tests/` | pytest suite (GitHub API faked at the HTTP layer) |
+| `requirements.txt`, `requirements-dev.txt` | Pinned runtime and test dependencies |
+| `tests/` | pytest suite (GitHub API faked at the HTTP layer) |
 
----
+## Tech stack
 
-<div align="center">
-  <b>Built for hassle-free, on-time attendance tracking.</b>
-</div>
+Python 3.11 · FastAPI · Uvicorn · APScheduler · Playwright (Chromium) · PyOTP · GitHub Actions · Microsoft Graph · Docker · Render
