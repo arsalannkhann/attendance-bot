@@ -76,6 +76,10 @@ CATCHUP_WINDOW = timedelta(minutes=int(os.environ.get("CATCHUP_WINDOW_MINUTES", 
 
 scheduler = BackgroundScheduler(timezone=IST)
 
+# In-process mode: only one Chromium at a time. Two at once (a scheduled fire
+# overlapping a manual /run) would blow the 512 MB instance.
+_BROWSER_LOCK = threading.Lock()
+
 
 def _scheduled_job(
     action: str,
@@ -89,11 +93,12 @@ def _scheduled_job(
         # Forced runs skip the weekend gate; forced and catch-up runs skip the
         # humanising jitter so they happen immediately.
         if GITHUB is None:
-            result = run_attendance(  # type: ignore[arg-type]
-                action,
-                jitter_seconds=60 if jitter else 0,
-                skip_weekend_check=force,
-            )
+            with _BROWSER_LOCK:
+                result = run_attendance(  # type: ignore[arg-type]
+                    action,
+                    jitter_seconds=60 if jitter else 0,
+                    skip_weekend_check=force,
+                )
             log.info("Scheduler job %s done: %s", action, result)
         else:
             _run_on_github(action, force=force, jitter=jitter, source=source)
@@ -228,7 +233,7 @@ async def lifespan(app: FastAPI):
             GITHUB.repo, GITHUB.workflow, GITHUB.ref,
         )
     else:
-        log.info("Browser runs in-process; set GH_DISPATCH_TOKEN to run it on GitHub Actions")
+        log.info("Browser runs in-process on this service (GH_DISPATCH_TOKEN unset)")
     threading.Thread(target=_catch_up, daemon=True).start()
     if SELF_PING_URL:
         threading.Thread(target=_self_ping_loop, daemon=True).start()

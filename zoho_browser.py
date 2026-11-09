@@ -575,13 +575,29 @@ def _punch(page, action: Action, *, dry_run: bool = False) -> str:
     return result
 
 
+# Render's free instance has 512 MB. These flags trim Chromium's footprint
+# (one renderer process, capped JS heap, no GPU/extension/background work).
+_LEAN_CHROMIUM_ARGS = [
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--mute-audio",
+    "--no-first-run",
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=192",
+]
+_BLOCKED_RESOURCE_TYPES = frozenset({"image", "font", "media"})
+
+
 def _do_attendance(cfg: dict, action: Action, *, dry_run: bool = False) -> str:
     """Single attempt. Returns a human-readable result string. Raises on failure.
     With `dry_run`, logs in and reads the widget but never clicks."""
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=["--no-sandbox", "--disable-dev-shm-usage", *_LEAN_CHROMIUM_ARGS],
         )
         ctx = browser.new_context(
             viewport={"width": 1280, "height": 800},
@@ -589,6 +605,15 @@ def _do_attendance(cfg: dict, action: Action, *, dry_run: bool = False) -> str:
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
+        )
+        # Images, fonts and media are decoration here; skipping them saves
+        # memory and bandwidth on small instances. Scripts, styles and XHR
+        # are untouched, so the attendance widget renders as before.
+        ctx.route(
+            "**/*",
+            lambda route: route.abort()
+            if route.request.resource_type in _BLOCKED_RESOURCE_TYPES
+            else route.continue_(),
         )
         page = ctx.new_page()
         try:
