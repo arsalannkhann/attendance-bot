@@ -58,7 +58,7 @@ flowchart LR
     MAIL <--> GRAPH[("Mailbox<br/>Microsoft Graph")]
 ```
 
-Without `GH_DISPATCH_TOKEN` the service falls back to running Chromium in-process on Render. That works, but the free instance often runs out of memory, and the catch-up stays off.
+GitHub Actions is the primary path. If a dispatch fails or the GitHub run concludes without success, the service runs the browser itself as a fallback (`FALLBACK_TO_RENDER`, on by default). Punching is idempotent because the bot reads the attendance record first, so a run that already succeeded is never repeated. Without `GH_DISPATCH_TOKEN` the service always runs Chromium in-process; the free instance can run out of memory doing that, and the catch-up stays off.
 
 ### Execution flow
 
@@ -257,6 +257,7 @@ All optional, set in the Render **Environment** tab. A change triggers a redeplo
 | `SELF_PING_INTERVAL` | `600` | Self-ping interval in seconds |
 | `SELF_PING_URL` | *(auto)* | Override the ping URL; derived from `RENDER_EXTERNAL_URL` |
 | `GH_DISPATCH_TOKEN` | *(unset)* | Token with **Actions: Read and write**. Set: browser runs on GitHub. Unset: it runs in-process on Render. |
+| `FALLBACK_TO_RENDER` | `true` | If the GitHub run can't start or doesn't succeed (Actions quota, outage, bad token), run the browser on this service instead. Needs `ZOHO_EMAIL`, `ZOHO_PASSWORD` and `ZOHO_TOTP` set on Render. |
 | `GH_DISPATCH_REPO` | *(auto)* | `owner/repo` to dispatch; derived from `RENDER_GIT_REPO_SLUG` |
 | `GH_DISPATCH_WORKFLOW` | `attendance.yml` | Workflow file to dispatch |
 | `GH_DISPATCH_REF` | *(auto)* | Branch to run; defaults to the deployed branch |

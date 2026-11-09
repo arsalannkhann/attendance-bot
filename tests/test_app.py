@@ -204,3 +204,54 @@ def test_startup_runs_catch_up_in_the_background(monkeypatch, threads, cfg, capl
 
     assert (app._catch_up, {}) in threads
     assert f"GitHub Actions ({REPO}" in caplog.text
+
+
+# ── Render fallback when GitHub can't do the run ────────────────────────────
+
+@pytest.fixture
+def portal_login(monkeypatch):
+    monkeypatch.setenv("ZOHO_EMAIL", "user@example.com")
+    monkeypatch.setenv("ZOHO_PASSWORD", "not-a-real-password")
+    monkeypatch.delenv("FALLBACK_TO_RENDER", raising=False)
+
+
+def test_failed_github_run_falls_back_to_the_browser_here(bot, portal_login):
+    bot.github.run_states[9001] = [("completed", "failure")]
+
+    app._scheduled_job("checkin", jitter=False)
+
+    assert dispatched(bot.github) == [("checkin", "scheduler")]
+    assert bot.browser == [{"action": "checkin", "jitter_seconds": 0, "skip_weekend_check": False}]
+
+
+def test_dispatch_error_falls_back_to_the_browser_here(bot, portal_login):
+    bot.github.dispatch_replies = [FakeResponse(403, {"message": "Actions disabled"})]
+
+    app._scheduled_job("checkout", jitter=False)
+
+    assert [b["action"] for b in bot.browser] == ["checkout"]
+
+
+def test_successful_github_run_does_not_start_a_second_browser(bot, portal_login):
+    app._scheduled_job("checkin", jitter=False)
+
+    assert bot.browser == []
+
+
+def test_fallback_can_be_switched_off(monkeypatch, bot, portal_login):
+    monkeypatch.setenv("FALLBACK_TO_RENDER", "false")
+    bot.github.run_states[9001] = [("completed", "failure")]
+
+    app._scheduled_job("checkin", jitter=False)
+
+    assert bot.browser == []
+
+
+def test_fallback_needs_the_portal_login_on_this_service(monkeypatch, bot):
+    monkeypatch.delenv("ZOHO_EMAIL", raising=False)
+    monkeypatch.delenv("ZOHO_PASSWORD", raising=False)
+    bot.github.run_states[9001] = [("completed", "failure")]
+
+    app._scheduled_job("checkin", jitter=False)
+
+    assert bot.browser == []

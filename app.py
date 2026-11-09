@@ -97,22 +97,56 @@ def _scheduled_job(
         # Forced runs skip the weekend gate; forced and catch-up runs skip the
         # humanising jitter so they happen immediately.
         if GITHUB is None:
-            extra = {"dry_run": True} if dry_run else {}
-            with _BROWSER_LOCK:
-                result = run_attendance(  # type: ignore[arg-type]
-                    action,
-                    jitter_seconds=60 if jitter else 0,
-                    skip_weekend_check=force,
-                    **extra,
+            _run_in_process(action, force=force, jitter=jitter, dry_run=dry_run)
+        elif not _run_on_github_safely(action, force=force, jitter=jitter, source=source):
+            # GitHub is the primary path. When it can't start or finish the run
+            # (Actions quota exhausted, outage, bad token), run the browser here
+            # instead. Punching is idempotent: it reads the attendance record
+            # first, so a run that half-succeeded on GitHub is not repeated.
+            if _fallback_ready():
+                log.warning("Falling back to running %s on this service", action)
+                _run_in_process(action, force=force, jitter=False, dry_run=dry_run)
+            else:
+                log.error(
+                    "GitHub run for %s failed and the Render fallback is off or "
+                    "missing ZOHO_EMAIL/ZOHO_PASSWORD", action,
                 )
-            log.info("Scheduler job %s done: %s", action, result)
-        else:
-            _run_on_github(action, force=force, jitter=jitter, source=source)
     except Exception as exc:
         log.exception("Scheduler job %s failed: %s", action, exc)
 
 
-def _run_on_github(action: str, *, force: bool, jitter: bool, source: str) -> None:
+def _run_in_process(action: str, *, force: bool, jitter: bool, dry_run: bool = False) -> None:
+    extra = {"dry_run": True} if dry_run else {}
+    with _BROWSER_LOCK:
+        result = run_attendance(  # type: ignore[arg-type]
+            action,
+            jitter_seconds=60 if jitter else 0,
+            skip_weekend_check=force,
+            **extra,
+        )
+    log.info("Scheduler job %s done: %s", action, result)
+
+
+def _fallback_ready() -> bool:
+    """Fallback is on by default; needs the portal login on this service."""
+    if os.environ.get("FALLBACK_TO_RENDER", "true").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    return bool(
+        os.environ.get("ZOHO_EMAIL", "").strip() and os.environ.get("ZOHO_PASSWORD", "").strip()
+    )
+
+
+def _run_on_github_safely(action: str, *, force: bool, jitter: bool, source: str) -> bool:
+    """True when GitHub handled the run (or is still running it); False when it
+    could not be started or concluded without success."""
+    try:
+        return _run_on_github(action, force=force, jitter=jitter, source=source)
+    except Exception as exc:
+        log.error("Scheduler job %s: GitHub dispatch failed: %s", action, exc)
+        return False
+
+
+def _run_on_github(action: str, *, force: bool, jitter: bool, source: str) -> bool:
     if jitter:
         delay = random.randint(0, 60)
         log.info("Humanising jitter: sleeping %ds before dispatching %s", delay, action)
@@ -125,13 +159,15 @@ def _run_on_github(action: str, *, force: bool, jitter: bool, source: str) -> No
             "Scheduler job %s: GitHub run still %s when we stopped watching — %s",
             action, final.get("status"), run.html_url,
         )
-    elif final.get("conclusion") == "success":
+        return True  # unknown outcome: don't risk a second browser
+    if final.get("conclusion") == "success":
         log.info("Scheduler job %s done: GitHub run succeeded — %s", action, run.html_url)
-    else:
-        log.error(
-            "Scheduler job %s failed: GitHub run concluded %s — %s",
-            action, final.get("conclusion"), run.html_url,
-        )
+        return True
+    log.error(
+        "Scheduler job %s failed: GitHub run concluded %s — %s",
+        action, final.get("conclusion"), run.html_url,
+    )
+    return False
 
 
 def due_catchups(
