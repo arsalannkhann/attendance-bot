@@ -87,17 +87,23 @@ def _scheduled_job(
     force: bool = False,
     jitter: bool = True,
     source: str = "scheduler",
+    dry_run: bool = False,
 ) -> None:
-    log.info("Scheduler firing: %s (force=%s, source=%s)", action, force, source)
+    log.info(
+        "Scheduler firing: %s (force=%s, source=%s%s)",
+        action, force, source, ", dry-run" if dry_run else "",
+    )
     try:
         # Forced runs skip the weekend gate; forced and catch-up runs skip the
         # humanising jitter so they happen immediately.
         if GITHUB is None:
+            extra = {"dry_run": True} if dry_run else {}
             with _BROWSER_LOCK:
                 result = run_attendance(  # type: ignore[arg-type]
                     action,
                     jitter_seconds=60 if jitter else 0,
                     skip_weekend_check=force,
+                    **extra,
                 )
             log.info("Scheduler job %s done: %s", action, result)
         else:
@@ -283,13 +289,19 @@ def status() -> dict[str, Any]:
 def manual_run(
     action: str = Query(..., pattern="^(checkin|checkout)$"),
     force: bool = Query(False, description="Bypass weekend check and jitter (smoke tests)"),
+    dry_run: bool = Query(False, description="Log in and read the widget but never click (in-process mode)"),
     x_trigger_token: str | None = Header(default=None, alias="X-Trigger-Token"),
 ) -> dict[str, str | bool]:
     if TRIGGER_TOKEN and x_trigger_token != TRIGGER_TOKEN:
         raise HTTPException(status_code=401, detail="invalid trigger token")
+    job_kwargs: dict[str, Any] = {
+        "action": action, "force": force, "jitter": not force, "source": "api",
+    }
+    if dry_run is True:
+        job_kwargs["dry_run"] = True
     threading.Thread(
         target=_scheduled_job,
-        kwargs={"action": action, "force": force, "jitter": not force, "source": "api"},
+        kwargs=job_kwargs,
         daemon=True,
     ).start()
-    return {"status": "started", "action": action, "force": force}
+    return {"status": "started", "action": action, "force": force, "dry_run": dry_run is True}
